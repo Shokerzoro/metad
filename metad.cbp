@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6" />
+	<Project>
+		<Option title="metad" />
+		<Option pch_mode="2" />
+		<Option compiler="gcc" />
+		<Build>
+			<Target title="Debug">
+				<Option output="bin/Debug/metad" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Debug/" />
+				<Option type="1" />
+				<Option compiler="gcc" />
+				<Option parameters="delta /home/ivan/demtest/metad/ /home/ivan/demtest/deltad/ demonize 127.0.0.1 6666" />
+				<Compiler>
+					<Add option="-Wall" />
+					<Add option="-g" />
+					<Add option="-DDEBUG_BUILD" />
+					<Add option="-DBUFFSIZE 255" />
+				</Compiler>
+			</Target>
+			<Target title="Release">
+				<Option output="bin/Release/metad" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Release/" />
+				<Option type="1" />
+				<Option compiler="gcc" />
+				<Compiler>
+					<Add option="-O2" />
+					<Add option="-DBUFFSIZE 255" />
+				</Compiler>
+				<Linker>
+					<Add option="-s" />
+				</Linker>
+			</Target>
+		</Build>
+		<Compiler>
+			<Add option="-Wall" />
+			<Add option="-fexceptions" />
+		</Compiler>
+		<Unit filename="args.txt" />
+		<Unit filename="deltametaworker.cpp" />
+		<Unit filename="fullmetaworker.cpp" />
+		<Unit filename="main.cpp" />
+		<Unit filename="mainfunc.cpp" />
+		<Unit filename="mainfunc.h" />
+		<Unit filename="meta.cpp" />
+		<Unit filename="meta.h" />
+		<Unit filename="readme.txt">
+			<Option target="&lt;{~None~}&gt;" />
+		</Unit>
+		<Unit filename="threaddatacontainer.h" />
+		<Unit filename="tstring.h" />
+		<Unit filename="xmlfunc.cpp" />
+		<Unit filename="xmlfunc.h" />
+		<Extensions />
+	</Project>
+</CodeBlocks_project_file>
