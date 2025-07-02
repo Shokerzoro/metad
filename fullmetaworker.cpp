@@ -76,9 +76,9 @@ void full_metad_worker(void)
         char buf[4096];
         ssize_t readed = read(infd, buf, sizeof(buf));
 
-        #ifdef DEBUG_BUILD
-        cout << "Reading interrupted." << endl;
-        #endif
+        cout << "Full metadata configured." << endl;
+        cout << "Stated at: " << get_current_time() << endl;
+        cout << "Waitung events in target: " << target.string() << endl;
 
         if (upflag == 1)
         {

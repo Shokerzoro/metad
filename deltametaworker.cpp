@@ -2,7 +2,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sstream>
-#include <poll.h>
 #include <errno.h>
 #include <string.h>
 #include <filesystem>

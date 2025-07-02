@@ -51,7 +51,7 @@ void become_daemon(string logpath)
         throw std::runtime_error("Change dir failed");
 
     // Открытие файла лога
-    int logfile = open(logpath.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    int logfile = open(logpath.c_str(), O_CREAT | O_WRONLY, 0644);
     if (logfile == -1)
         throw std::runtime_error("Error open logfile");
 
@@ -62,6 +62,10 @@ void become_daemon(string logpath)
     dup2(logfile, STDOUT_FILENO);
     dup2(logfile, STDERR_FILENO);
     close(logfile); //Можно убрать, чтобы не занимал места
+
+    #ifdef DEBUG_BUILD
+    cout << "Demon started" << endl;
+    #endif // DEBUG_BUILD
 }
 
 void mute_signals(void)

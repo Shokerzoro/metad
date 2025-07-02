@@ -35,9 +35,10 @@
 Добавить пользователя uniter-meta, передать полные права на папки (сделать владельцем) /home/uniter, /home/uniterfull, /home/uniterdelta, /etc/metad
 
 /*Последовательность команд
-[1]Создаем логфайл
+[1]Создаем логфайлы
 sudo mkdir -p /var/log/metad
-sudo touch /var/log/metad/logfile.txt
+sudo touch /var/log/metad/fullmetalog.log
+sudo touch /var/log/metad/deltametalog.log
 [2]Создание пользователя uniter-meta
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin uniter-meta
 [3]С помощью системы ACL добавляем ему права на папки в все файлы, в т.ч. и в будущем
@@ -48,10 +49,55 @@ sudo setfacl -R -m u:uniter-meta:rwx /var/log/metad/
 [4]Скачиваем библиотеку tinyxml2
 sudo apt update
 sudo apt install libtinyxml2-dev
-[5]Далее можно запускать наших демонят от имени uniter-meta
+
+[5]Далее создаем файлы конфигурации для systemctl
+[5.1]sudo nano /etc/systemd/system/fullmetad.service
+
+[Unit]
+Description=FullMeta Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=uniter-meta
+Group=uniter-meta
+ExecStart=/etc/metad/metad full /home/uniter/ /home/uniterfull/ demonize
+Restart=on-failure
+
+# Логирование прямо в файл
+StandardOutput=append:/var/log/metad/fullmetalog.log
+StandardError=append:/var/log/metad/fullmetalog.log
+
+[5.2]sudo nano /etc/systemd/system/deltametad.service
+
+[Unit]
+Description=DeltaMeta Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=uniter-meta
+Group=uniter-meta
+ExecStart=/etc/metad/metad delta /home/uniterfull/ /home/uniterdelta/ demonize 77.110.116.155 6666
+Restart=on-failure
+
+# Логирование прямо в файл
+StandardOutput=append:/var/log/metad/fullmetalog.log
+StandardError=append:/var/log/metad/fullmetalog.log
+
+[6]Запускаем с помощью systemctl
+sudo systemctl daemon-reload
+sudo systemctl enable fullmetad
+sudo systemctl start fullmetad
+sudo systemctl enable deltametad
+sudo systemctl start deltametad
+
+[7]Проверяем
+sudo systemctl status fullmetad
+sudo systemctl status deltametad
 */
 
-Запуск от имени uniter-meta
+Запуск от имени uniter-meta с помощью systemctl
 ##full-meta демон
 sudo -u uniter-meta /etc/metad/metad full /home/uniter/ /home/uniterfull/ demonize
 
@@ -92,7 +138,8 @@ SERVERERROR
 
 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ПРОБЛЕМЫ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-В идеале добавить свои exceptions для ошибок протокола. Совсем другая причина возникновения и логика обработки.
+
+В идеале добавить свои классы exceptions для ошибок протокола. Совсем другая причина возникновения и логика обработки.
 Добавить блокировку файлов на время ожидания таймера full-meta
 //файлы обновлены, но fullmeta еще не сгенерирована; можем отправить файл, который обновлен, но мы о нем ничего не знаем.
 //В теории, если одновременно почти пришел запрос, и происходит генерация delta. Можно не сохранить файл, т.к. он только что сохранился другим потоком.
@@ -100,3 +147,4 @@ SERVERERROR
 //В сетях пишут, что все равно ОС рано или поздно закроет сокет и вернет -1, но мб не стоит долго ждать
 Проверка регистрации - тут нужно подключать базу данных уже
 Добавить шифрование над TCP - можно использовать открытые библиотеки
+

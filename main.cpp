@@ -1,25 +1,3 @@
-
-/*  Utility/Daemon for meta data generation
-Утилита, которая сгенерирует мета данные о каталоге / вычислит дельту до самой актуальной версии файлов
-1. full-meta-"date".XML - содержит полную информацию структуре каталога.
-2. delta-meta-"date".XML - содержит дельту изменений между указанным актуальным full-meta файлами
-Принимает аргументы
-[1]-full / %version% полные или дельта, обязательно (во втором случае строка - версия относительно которой формируется дельта)
-[2]-target_dir путь к каталогу для генерации, обязательно (для дельты в нем должны находится full-meta документы а не каталог для генерации)
-[3]-meta_dir путь к каталогу сохранения XML, по умолчанию target_dir (не обязательно)
-
-Демон предназначен для автогенерации full-meta, отслеживает изменения в target-dir.
-Демон предназначен для генерации delta-meta по запросу (TCP) и отправки клиенту
-Будет автом. генерировать meta данные, delta по запросу
-Принимает аргументы:
-[1]-full/delta как будет отрабатывать, обязательно
-[2]-target_dir путь к каталогу для генерации, обязательно (для дельты в нем должны находится full-meta документы а не каталог для генерации)
-[3]-meta путь сохранения
-[4]-demonize
-[5]-IPv4 адрес в формате 1111.2222.3333.444 (для delta обязательно)
-[6]-Порт прослушивания (для delta обязательно)
-*/
-
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -32,6 +10,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <limits.h>
+#include <execinfo.h>
+#include <stdlib.h>
+#include <signal.h>
 
 #include "meta.h"
 #include "tstring.h"
@@ -52,7 +33,7 @@ using ThreadList = std::list<ThreadDataContainer*>;
 extern void full_metad_worker(void);
 extern void* delta_metad_worker(void* data);
 extern void become_daemon(string logpath);
-
+void crash_reporter(int sig);
 //Общие для всех переменные
 Path target;
 Path meta;
@@ -113,9 +94,10 @@ int main(int argc, char** argv)
             string actual_meta_name = get_actual(target, actualdate);
 
             if(!std::filesystem::exists(old_meta_name))
-            { cout << "Error old meta XML doc path: " << old_meta_name << endl; exit(1); }
+                throw std::runtime_error("Error old meta XML doc path: " + old_meta_name);
             if(!std::filesystem::exists(actual_meta_name))
-            { cout << "Error actual meta XML doc path: " << actual_meta_name << endl; exit(1); }
+                throw std::runtime_error("Error actual meta XML doc path:" + actual_meta_name);
+
 
             #ifdef DEBUG_BUILD
             cout << "Old full-meta XML doc: " << old_meta_name << endl;
@@ -126,7 +108,10 @@ int main(int argc, char** argv)
             docname = "delta-meta-" + calltype + "-" + actualdate + ".XML";
             fulldocname = meta.string() + docname;
             if(std::filesystem::exists(fulldocname))
-            { cout << "Delta XML already exists: " << fulldocname << endl; exit(0); }
+            {
+                cout << "Delta XML already exists: " << fulldocname << endl;
+                exit(0);
+            }
 
             XMLDocument old_XML_doc;
             XMLDocument actual_XML_doc;
@@ -159,15 +144,10 @@ int main(int argc, char** argv)
 
     } else if (((argc = 5) || (argc = 7)) && (strcmp(argv[4], "demonize") == 0)) //Отработка как демон
     {
-        #ifdef DEBUG_BUILD
-        cout << "Demon starts" << endl;
-        #endif // DEBUG_BUILD
-
-        //Демонизация, нужно очень внимательно следить за открытыми файлами и утечкой памяти
-        #ifndef DEBUG_BUILD
-        string logpath("/var/log/metad/logfile.txt");
-        become_daemon(logpath);
-        #endif // release
+        //Добавим краш-репорты
+        signal(SIGABRT, crash_reporter);
+        signal(SIGSEGV, crash_reporter);
+        signal(SIGBUS, crash_reporter);
 
         //Необходимые для работы строки
         string calltype = argv[1]; //Тип вызова full/delta
@@ -180,9 +160,6 @@ int main(int argc, char** argv)
 
         if(calltype == "full") //Демон full-meta
         {
-            #ifdef DEBUG_BUILD
-            cout << "FULL META DAEMON" << endl;
-            #endif // DEBUG_BUILD
 
             full_metad_worker(); //Бесконечная работа демонаъ
 
@@ -228,28 +205,37 @@ int main(int argc, char** argv)
             int newworkers = 0;
             ThreadList threads;
 
-            cout << "Configured. Started at:" << get_current_time() << endl;
+            cout << "Delta metadata configured." << endl;
+            cout << "Started at:" << get_current_time() << endl;
             cout << "Listening: " << ipv4 << ":" << port << endl;
-            cout << "Waiting incoming connections" << endl;
 
-
-            while(workersock = accept(serversock, nullptr, nullptr)) //Бесконечный цикл обслуживания клиентов
+            while(true) //Бесконечный цикл обслуживания клиентов
             {
+                workersock = accept(serversock, nullptr, nullptr); //Блокирующее ожидание
+                if(workersock < 0) { continue; } //Вдруг было прервано сигналом
+
                 #ifdef DEBUG_BUILD
                 cout << "Got acception" << endl;
                 #endif // DEBUG_BUILD
 
                 ThreadDataContainer* nthreadd;
-                try { nthreadd = new ThreadDataContainer(workersock); }
-                catch(exception & ex) { shutdown(workersock, SHUT_RDWR); cerr << "Container baddalloc: " << ex.what() << endl; close(workersock); continue; }
-
-                //Создание потока
-                if(pthread_create(&nthreadt, nullptr, delta_metad_worker, nthreadd) != 0)
-                {
+                try {
+                    nthreadd = new ThreadDataContainer(workersock);
+                }
+                catch(exception & ex)
+                { //Отмена соединения
+                    cerr << "ThreadDataContainer baddalloc: " << ex.what() << endl;
                     shutdown(workersock, SHUT_RDWR);
-                    cerr << "Thread creation error" << strerror(errno) << endl;
-                    delete nthreadd;
                     close(workersock);
+                    continue;
+                }
+
+                if(pthread_create(&nthreadt, nullptr, delta_metad_worker, nthreadd) != 0)
+                { //Отмена соединение и освобождение памяти
+                    cerr << "Thread creation error" << strerror(errno) << endl;
+                    shutdown(workersock, SHUT_RDWR);
+                    close(workersock);
+                    delete nthreadd;
                     continue;
                 }
                 else //Все структуры готовы
@@ -266,10 +252,17 @@ int main(int argc, char** argv)
                 {
                     ThreadDataContainer* thrd = *iter;
                     pthread_t thrdid = thrd->checkrun();
-                    if(thrdid != (pthread_t)-1) //значит вернул настоящий pthread
-                    { auto deliter = iter; iter++; pthread_join(thrdid, nullptr); threads.erase(deliter); delete thrd; }
+                    if(thrdid != (pthread_t)-1)
+                    { //Присоединяем поток, освобождаем ThreadDataContainer и чистим структуру данных
+                        auto deliter = iter; iter++;
+                        pthread_join(thrdid, nullptr);
+                        threads.erase(deliter);
+                        delete thrd;
+                    }
                     else
-                    { iter++; }
+                    {
+                        iter++;
+                    }
                 }
 
                 #ifdef DEBUG_BUILD
@@ -284,5 +277,17 @@ int main(int argc, char** argv)
     return 0;
 } //Main
 
+void crash_reporter(int sig)
+{
+    void* callstack[128];
+    int frames = backtrace(callstack, 128);
+
+    std::cerr << "ABORTED. Signal receved: " << sig << endl;
+    std::cerr << "Backtrace (" << frames << " frames)" << endl;
+
+    backtrace_symbols_fd(callstack, frames, STDERR_FILENO);
+
+    _exit(1); // используем _exit, чтобы не вызывать деструкторы
+}
 
 
