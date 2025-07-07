@@ -63,9 +63,9 @@ void full_metad_worker(void)
     inotify_loop(infd, target, mapper);
     upflag = 0;
 
-    #ifdef DEBUG_BUILD
-    cout << "Into eternal loooooooooooooooooop" << endl;
-    #endif
+    cout << "Full metadata configured." << endl;
+    cout << "Stated at: " << get_current_time() << endl;
+    cout << "Waitung events in target: " << target.string() << endl;
 
     while (true)
     {
@@ -75,10 +75,6 @@ void full_metad_worker(void)
 
         char buf[4096];
         ssize_t readed = read(infd, buf, sizeof(buf));
-
-        cout << "Full metadata configured." << endl;
-        cout << "Stated at: " << get_current_time() << endl;
-        cout << "Waitung events in target: " << target.string() << endl;
 
         if (upflag == 1)
         {
