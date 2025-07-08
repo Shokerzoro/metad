@@ -33,10 +33,8 @@ public:
         #endif // DEBUG_BUILD
         if (m_sockfd >= 0) // Попытка выключить соединение
         {
-            if (shutdown(m_sockfd, SHUT_RDWR) == -1)
-            { throw std::runtime_error("TCP Connection shutdown error"); }
-            if (close(m_sockfd) == -1)
-            { throw std::runtime_error("Socket closing error"); }
+            shutdown(m_sockfd, SHUT_RDWR);
+            close(m_sockfd);
             m_sockfd = -1; // предотвратить повторное закрытие
         }
 
