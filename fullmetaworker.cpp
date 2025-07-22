@@ -1,0 +1,219 @@
+#include <iostream>
+#include <map>
+#include <exception>
+#include <filesystem>
+#include <tinyxml2.h>
+#include <sys/inotify.h>
+#include <signal.h>
+#include <errno.h>
+
+#include "meta.h"
+#include "tstring.h"
+#include "mainfunc.h"
+#include "xmlfunc.h"
+
+#define DIRMASK (IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_ONLYDIR)
+#define FILEMASK (IN_MODIFY | IN_DELETE_SELF | IN_DONT_FOLLOW)
+
+#define BYTE (size_t)1
+#define ALARMTIME 30
+
+using namespace tinyxml2;
+using std::string;
+using std::cout;
+using std::cerr;
+using std::endl;
+using std::map;
+using std::exception;
+using Pair = std::pair<int, string>;
+using IMap = std::map<int, string>;
+using Path = std::filesystem::path;
+using Direntry = std::filesystem::directory_entry;
+using Diriter = std::filesystem::directory_iterator;
+
+void inotify_loop(int infd, Path & target, IMap & mapper);
+int watch_path(int infd, Direntry & newentry, uint32_t mask);
+int clear_mapper(IMap & mapper);
+
+static void sigalarm_hdl(int sigid); //Установка обработчика таймера
+static void generate_fullxml(string & version); //Сохраняет с именем fullmeta-version
+static void update_inotify(void); //Апдейтим инотифай
+
+static int upflag; // Флаг входа обработчика SIGALRM
+extern Path target;
+extern Path meta;
+
+void full_metad_worker(Path & snap_dir)
+{
+    int infd;
+    char buf[4096];
+    IMap mapper;
+    string version, build_time;
+    Path metafile(target.string() + "/meta.txt");
+    Path new_snap;
+
+    //Устанавливаем обработчик сигнала, инициируем inotify, получаем первую версию и привязываем инотифай ко всему
+    try {
+        setup_sigalarm_handler(sigalarm_hdl);
+        infd = inoinit();
+        get_meta(metafile, version, build_time);
+    }
+    catch(std::runtime_error & err)
+    {
+        cout << "runtime_error: " << err.what() << endl;
+        exit(1);
+    }
+
+    //Генерируем начальный fullmeta xml
+    generate_fullxml(version);
+
+    //Копируем версию
+    new_snap = Path(snap_dir.string() + "/" + version);
+    std::filesystem::create_directory(new_snap);
+    const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
+    std::filesystem::copy(target, new_snap, CopyOptions);
+
+    //Проходим по всему таргету наблюдателем
+    inotify_loop(infd, target, mapper);
+
+    cout << "Full metadata configured." << endl;
+    cout << "Stated at: " << get_current_time() << endl;
+    cout << "Waitung events in target: " << target.string() << endl;
+
+    while (true)
+    { //Бесконечный цикл работы воркера
+        #ifdef DEBUG_BUILD
+        cout << "Making blocking reading." << endl;
+        #endif
+
+        //Тут чтение, которое либо прерывается сигналом, либо прочитывает события инотифай
+        ssize_t readed = read(infd, buf, sizeof(buf));
+
+        if (upflag == 1) //fullmeta generating
+        {
+            #ifdef DEBUG_BUILD
+            cout << "upflag is: " << upflag << " Time to generate data" << endl;
+            #endif
+            upflag = 0;
+
+            try {
+                get_meta(metafile, version, build_time);
+            }
+            catch(std::exception & ex)
+            {
+                //Логируем
+                cerr << "Got exception while fullmeta generating: " << ex.what() << endl;
+                continue;
+            }
+
+            //Генерируем fullmeta xml
+            generate_fullxml(version);
+
+            //Копируем версию
+            new_snap = Path(snap_dir.string() + "/" + version);
+            std::filesystem::create_directory(new_snap);
+            const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
+            std::filesystem::copy(target, new_snap, CopyOptions);
+
+            continue;
+        }  //fullmeta generating
+        else //inotify updating
+        {
+            for (char* ptr = buf; ptr < buf + readed;)
+            { //Цикл чтения событий
+                struct inotify_event* event = (struct inotify_event*)ptr;
+
+                auto fiter = mapper.find(event->wd);
+                if (fiter == mapper.end())
+                {
+                    ptr += sizeof(struct inotify_event) + event->len;
+                    continue;
+                }
+
+                string base = fiter->second;
+                if (!base.empty() && base.back() != '/') base += "/";
+
+                if (event->mask & IN_MODIFY)
+                {
+                    alarm(ALARMTIME);
+                    #ifdef DEBUG_BUILD
+                    cout << "File modified: " << base << endl;
+                    #endif
+                }
+
+                if (event->mask & IN_DELETE_SELF)
+                {
+                    #ifdef DEBUG_BUILD
+                    cout << "File or dir deleted (self): " << base << endl;
+                    #endif
+                    mapper.erase(fiter);
+                    clear_mapper(mapper);
+                    alarm(ALARMTIME);
+                }
+
+                if (!(event->mask & IN_ISDIR))
+                {
+                    if (event->mask & IN_CREATE)
+                    {
+                        string fullname = base + event->name;
+                        Direntry newentry(fullname);
+                        int wd = watch_path(infd, newentry, FILEMASK);
+                        if (wd != -1) mapper.insert(Pair(wd, fullname));
+                        #ifdef DEBUG_BUILD
+                        cout << "File created: " << fullname << endl;
+                        #endif
+                        alarm(ALARMTIME);
+                    }
+                } else
+                {
+                    if (event->mask & IN_CREATE)
+                    {
+                        string fullname = base + event->name;
+                        Path newdir(fullname);
+                        inotify_loop(infd, newdir, mapper);
+                        #ifdef DEBUG_BUILD
+                        cout << "Dir created: " << fullname << endl;
+                        #endif
+                        alarm(ALARMTIME);
+                    }
+                }
+
+                ptr += sizeof(struct inotify_event) + event->len;
+            }  //Цикл чтения событий
+        }  //inotify updating
+    } //Бесконечный цикл работы воркера
+}
+
+static void generate_fullxml(string & version) //Генерация и сохранение fullmetaxml
+{
+    string docname = "full-meta-" + version + ".XML";
+    string fulldocname = meta.string() + docname;
+
+    //Логируем
+    cout << "Update generating: " << version << endl;
+
+    XMLDocument new_XML_doc;
+    XMLElement* update = new_XML_doc.NewElement("update");
+    new_XML_doc.InsertFirstChild(update);
+    update->SetAttribute("version", version.c_str());
+    update->SetAttribute("filedir", target.string().c_str());
+
+    Direntry target_dir(target);
+    full_dmeta(update, target_dir, target);
+
+    new_XML_doc.SaveFile(fulldocname.c_str());
+}
+
+void sigalarm_hdl(int sigid)
+{
+    #ifdef DEBUG_BUILD
+    cout << "I am handler: ";
+    cout << "fot alarm signal: " << sigid << endl;
+    cout << "Upflag was: " << upflag;
+    #endif
+    upflag = 1;
+    #ifdef DEBUG_BUILD
+    cout << ". Now its: " << upflag << endl;
+    #endif // debug
+}
+
