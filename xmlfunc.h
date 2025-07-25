@@ -14,7 +14,7 @@ using Direntry = std::filesystem::directory_entry;
 //Безопасное открытие XML элемента
 extern void open_XML_doc(XMLDocument & xmldoc, string fullname);
 //Получить версию и удалить файл
-extern void get_meta(Path & metafile, string & vers_str, string & bldtime_str);
+extern void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string & vers_str, string & author_str);
 //Добавление элементу типовых атрибутов
 extern void set_XML_attr(XMLElement* xmlel, Direntry & dir, Path & target);
 //Сравнение элементов по пути (в идеале по относительному имени)

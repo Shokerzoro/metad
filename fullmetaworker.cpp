@@ -36,7 +36,8 @@ int watch_path(int infd, Direntry & newentry, uint32_t mask);
 int clear_mapper(IMap & mapper);
 
 static void sigalarm_hdl(int sigid); //Установка обработчика таймера
-static void generate_fullxml(string & version); //Сохраняет с именем fullmeta-version
+//Сохраняет с именем fullmeta-version
+static void generate_fullxml(string & bldtime_str, string & proj_name, string & version, string & author_str);
 static void update_inotify(void); //Апдейтим инотифай
 
 static int upflag; // Флаг входа обработчика SIGALRM
@@ -48,15 +49,19 @@ void full_metad_worker(Path & snap_dir)
     int infd;
     char buf[4096];
     IMap mapper;
-    string version, build_time;
-    Path metafile(target.string() + "/meta.txt");
+    string build_time, project_name, version, author;
+    Path metafile = target / "meta.XML";
     Path new_snap;
+
+    #ifdef DEBUG_BUILD
+    cout << "Looking for meta.xml: " << metafile << endl;
+    #endif
 
     //Устанавливаем обработчик сигнала, инициируем inotify, получаем первую версию и привязываем инотифай ко всему
     try {
         setup_sigalarm_handler(sigalarm_hdl);
         infd = inoinit();
-        get_meta(metafile, version, build_time);
+        get_meta(metafile, build_time, project_name, version, author);
     }
     catch(std::runtime_error & err)
     {
@@ -65,10 +70,10 @@ void full_metad_worker(Path & snap_dir)
     }
 
     //Генерируем начальный fullmeta xml
-    generate_fullxml(version);
+    generate_fullxml(build_time, project_name, version, author);
 
     //Копируем версию
-    new_snap = Path(snap_dir.string() + "/" + version);
+    new_snap = snap_dir / version;
     std::filesystem::create_directory(new_snap);
     const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
     std::filesystem::copy(target, new_snap, CopyOptions);
@@ -97,7 +102,7 @@ void full_metad_worker(Path & snap_dir)
             upflag = 0;
 
             try {
-                get_meta(metafile, version, build_time);
+                get_meta(metafile, build_time, project_name, version, author);
             }
             catch(std::exception & ex)
             {
@@ -107,7 +112,7 @@ void full_metad_worker(Path & snap_dir)
             }
 
             //Генерируем fullmeta xml
-            generate_fullxml(version);
+            generate_fullxml(build_time, project_name, version, author);
 
             //Копируем версию
             new_snap = Path(snap_dir.string() + "/" + version);
@@ -184,7 +189,8 @@ void full_metad_worker(Path & snap_dir)
     } //Бесконечный цикл работы воркера
 }
 
-static void generate_fullxml(string & version) //Генерация и сохранение fullmetaxml
+//Генерация и сохранение fullmetaxml
+static void generate_fullxml(string & bldtime_str, string & proj_name, string & version, string & author_str)
 {
     string docname = "full-meta-" + version + ".XML";
     string fulldocname = meta.string() + docname;
@@ -195,7 +201,10 @@ static void generate_fullxml(string & version) //Генерация и сохр�
     XMLDocument new_XML_doc;
     XMLElement* update = new_XML_doc.NewElement("update");
     new_XML_doc.InsertFirstChild(update);
+    update->SetAttribute("build_time", bldtime_str.c_str());
+    update->SetAttribute("project_name", proj_name.c_str());
     update->SetAttribute("version", version.c_str());
+    update->SetAttribute("author", author_str.c_str());
     update->SetAttribute("filedir", target.string().c_str());
 
     Direntry target_dir(target);

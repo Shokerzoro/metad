@@ -89,8 +89,6 @@ int main(int argc, char** argv)
         else //Одноразовая генерация дельты
         {
             //Полные пути до старого и актуального документов
-
-
             Path old_meta_path = (target.string() + "full-meta-" + calltype + ".XML");
             Path actual_meta_path;
             string actualdate;
@@ -103,8 +101,8 @@ int main(int argc, char** argv)
 
 
             #ifdef DEBUG_BUILD
-            cout << "Old full-meta XML doc: " << old_meta_name << endl;
-            cout << "Actual full-meta XML doc: " << actual_meta_name << endl;
+            cout << "Old full-meta XML doc: " << old_meta_path << endl;
+            cout << "Actual full-meta XML doc: " << actual_meta_path << endl;
             #endif // debug
 
             //Формируем имя файла и ищем, если существует
@@ -186,7 +184,7 @@ int main(int argc, char** argv)
             #endif // DEBUG_BUILD
             #ifdef DEBUG_BUILD
             string ipv4("127.0.0.1");
-            int port = 7783;
+            int port = 6666;
             #endif // DEBUG_BUILD
 
             int serversock, workersock;
@@ -270,9 +268,7 @@ int main(int argc, char** argv)
                         delete thrd;
                     }
                     else
-                    {
                         iter++;
-                    }
                 }
 
                 #ifdef DEBUG_BUILD

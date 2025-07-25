@@ -50,8 +50,8 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     vector<char> buffer(BUFFSIZE); //Отдельный буфер на каждый поток
     Path old_meta_path, actual_meta_path;
     string old_version, actual_version;
-    enum states{NONE, PROPER, REQUESTED, APPROVED, AGREED};
-    int state = states::NONE; //Состояние общения
+    enum class State { NONE, PROPER, REQUESTED, APPROVED, AGREED };
+    State state = State::NONE;
     int err_counter = 0;
     size_t ioctl = 0; //Для возможности более тонкого контроля
 
@@ -59,28 +59,28 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     cout << "delta_metad_worker starts routine" << endl;
     #endif // DEBUG_BUILD
 
-    while(ioctl = recvheader(sockfd, header, buffer)) //Цикл чтения запросов
+    while ((ioctl = recvheader(sockfd, header, buffer)) > 0) //Цикл чтения запросов
     { try {
-        if(state == states::NONE) //Первый запрос
+        if(state == State::NONE) //Первый запрос
         {
             if(header == "UNET-MES") //Uniter Network for Manufacturing Execution Systems
-                state = states::PROPER;
+                state = State::PROPER;
             else
                 return this_thread->stoprun();
         }
-        if(state == states::PROPER) //Первый запрос
+        if(state == State::PROPER) //Первый запрос
         {
             if(header == "GETUPDATE")
-                state = states::REQUESTED;
+                state = State::REQUESTED;
             else
                 throw std::invalid_argument("Wrong request");
         }
-        if(state == states::REQUESTED) //Получаем старую
+        if(state == State::REQUESTED) //Получаем старую
         {
-            old_meta_path = (target.string() + "full-meta-" + header + ".XML");
+            old_meta_path = target / ("full-meta-" + header + ".XML");
             if(std::filesystem::exists(old_meta_path))
             {
-                state = states::APPROVED;
+                state = State::APPROVED;
                 old_version = header;
                 get_actual(target, actual_meta_path, actual_version);
 
@@ -97,11 +97,11 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
             else
                 throw std::invalid_argument("Wrong version request: " + old_meta_path.string());
         }
-        if(state == states::APPROVED)
+        if(state == State::APPROVED)
         {
             if(header == "AGREE") //Получаем согласие
             {
-                state == states::AGREED;
+                state = State::AGREED;
                 break;
             }
             if(header == "REJECT") //Не хотят
@@ -112,10 +112,11 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     }
     catch(std::invalid_argument & ex)
     {
-        err_counter++;
-        if(err_counter == 3)
+        if(err_counter++ >= 3)
         {
+            cerr << "Client error: " << ex.what() << endl;
             sendheader(sockfd, "GOODBYE", buffer);
+            return this_thread->stoprun();
         }
         continue;
     }
@@ -172,6 +173,7 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     { cerr << "Filepath error: " << filedir << endl; return this_thread->stoprun(); }
 
     try { //Основная операция по отправке новых файлов
+        ioctl = sendheader(sockfd, actual_version, buffer);
         send_delta(sockfd, update, filedir, buffer); //Основная операция отправки данных
     }
     catch ( std::runtime_error & ex)
@@ -185,6 +187,6 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     cout << "delta_metad_worker ends routine" << endl;
     #endif // DEBUG_BUILD
 
-    ioctl = sendheader(sockfd, actual_version, buffer); //Отправляем напоследок последнюю версию
+    ioctl = sendheader(sockfd, "COMPLETE", buffer); //Отправляем напоследок последнюю версию
     return this_thread->stoprun();
 }

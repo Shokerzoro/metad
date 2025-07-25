@@ -241,64 +241,56 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
     XMLElement* xmliter = nullptr;
     uint16_t header_size;
 
-    xmliter = xmlel->FirstChildElement("newfile");
-    while(xmliter) //Цикл отправки файлов
+    for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile")) //Цикл отправки файлов
     {
         string tag("NEWFILE:");
-        string relpath = xmliter->Attribute("path");
-        string weightstr = xmliter->Attribute("weight");
-        string fullname = filedir + relpath;
-        string header = tag + relpath;
-        if (!std::filesystem::exists(fullname))
-            throw std::runtime_error("Файл не найден: " + fullname);
+        string header;
+        string relpath, weightstr, fullname;
+        int ioctl, fd; //Дескриптор файла для sendfile
 
-        int fd = -1; //Дескриптор файла для sendfile
-        char* endptr = nullptr;
-        uint32_t weight = std::strtoll(weightstr.c_str(), &endptr, 10);
+        try {
+            relpath = xmliter->Attribute("path");
+            fullname = filedir + relpath;
+            if (!std::filesystem::exists(fullname))
+                throw std::runtime_error("Файл не найден: " + fullname);
 
-        try { //Отправляем заголовок
+            char* endptr = nullptr;
+            weightstr = xmliter->Attribute("weight");
+            uint32_t weight = std::strtoll(weightstr.c_str(), &endptr, 10);
             if(weight == 0)
-                throw std::invalid_argument("Symlink maybe. How can it get here?");
+                throw std::invalid_argument("Symlink maybe. How can it get there?");
+
             if((fd = open(fullname.c_str(), O_RDONLY)) == -1)
                 throw std::runtime_error("Ошибка открытия файла: " + fullname);
 
-            header_size = fill_buff(header, buffer); //Записали хэдер
-            buffer.push_back(static_cast<char>((weight >> 24) & 0xFF));
-            buffer.push_back(static_cast<char>((weight >> 16) & 0xFF));
-            buffer.push_back(static_cast<char>((weight >> 8) & 0xFF));
-            buffer.push_back(static_cast<char>((weight >> 0) & 0xFF)); //Записали вес файла
-            int ioctl = send(sockfd, buffer.data(), (size_t)(header_size), MSG_MORE);
+            //Отправим заголовок и ждем подтверждения
+            ioctl = sendheader(sockfd, relpath, buffer);
+            ioctl = recvheader(sockfd, header, buffer);
+            if(header != "NEED")
+                continue;
+
+            //Отправляем файл
+            ioctl = send_file(sockfd, fd, weight, buffer);
+            if(ioctl == -1)
+            {
+                close(fd);
+                throw std::runtime_error("Error while sending file" + fullname);
+            }
+
+            //И не забываем закрыть файл если все прошло успешно
+            if(close(fd) == -1)
+                throw std::runtime_error("File closing error: " + fullname);
 
             #ifdef DEBUG_BUILD
             cout << "NEWFILE SENT: " << relpath << endl;
             #endif // DEBUG_BUILD
         }
-        catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
+        catch(std::invalid_argument & ex) //Не критичное исключение, а критыные выбрасывают в отказ на одной процедуре ниже
         {
             cerr << "Got error: " << ex.what() << endl;
             xmliter = xmliter->NextSiblingElement("newfile");
             continue;
-        }
-
-        #ifndef DEBUG_BUILD
-        //Отправляем файл целиком
-        off_t offset = 0;
-        while (offset < weight)
-        {
-            ssize_t sent = sendfile(sockfd, fd, &offset, weight - offset);
-            if (sent <= 0)
-            {
-                close(fd);
-                throw std::runtime_error("Ошибка в sendfile при передаче: " + string(relpath));
-            }
-        }
-        #endif // DEBUG_BUILD
-
-        if(close(fd) == -1) //И не забываем закрыть файл
-                throw std::runtime_error("File closing error: " + fullname);
-
-        xmliter = xmliter->NextSiblingElement("newfile");
-    } //Цикл отправки файлов
+        } } //Цикл отправки файлов
 
     xmliter = xmlel->FirstChildElement("delfile");
     while(xmliter) //Цикл отправки файлов на удаление

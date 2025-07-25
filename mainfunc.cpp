@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <vector>
 #include <sys/inotify.h>
+#include <sys/sendfile.h>
 #include <map>
 
 #include "tstring.h"
@@ -292,7 +293,25 @@ size_t sendheader(const int sockfd, const std::string & header, std::vector<char
     return writesocket(sockfd, buffer, (size_t)header_size, 0);;
 }
 
-void get_actual(const Path & dir_path, Path & actual_meta_path, string & actualdate);
+size_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer)
 {
+        buffer.clear();
+        buffer.push_back(static_cast<char>((weight >> 24) & 0xFF));
+        buffer.push_back(static_cast<char>((weight >> 16) & 0xFF));
+        buffer.push_back(static_cast<char>((weight >> 8) & 0xFF));
+        buffer.push_back(static_cast<char>((weight >> 0) & 0xFF)); //Записали вес файла
+        int ioctl = send(sockfd, buffer.data(), (size_t)4, MSG_MORE);
 
+        //Отправляем файл целиком
+        #ifndef DEBUG_BUILD
+        off_t offset = 0;
+        while (offset < weight)
+        {
+            ssize_t sent = sendfile(sockfd, fd, &offset, weight - offset);
+            if (sent <= 0) //Ошибка при передаче файла
+                return -1;
+        }
+        #endif // DEBUG_BUILD
+
+        return ioctl;
 }

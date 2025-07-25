@@ -30,7 +30,7 @@ extern void get_actual(const Path & dir_path, Path & actual_meta_path, string & 
 extern string get_current_time(void) noexcept;
 
 //Работа с сетью
-extern size_t send_file(const int sockfd, Path & file); //Отправка целого файла
+extern size_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer); //Отправка целого файла
 extern size_t recvheader(const int sockfd, std::string & header, std::vector<char> & buffer); //Чтение хэдера из сокета
 extern size_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer); //запись хэдера в сокет
 

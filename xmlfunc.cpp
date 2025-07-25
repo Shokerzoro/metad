@@ -31,21 +31,61 @@ void open_XML_doc(XMLDocument & xmldoc, string fullname)
     #endif // debug
 }
 //Получить версию и удалить файл
-void get_meta(Path & metafile, string & vers_str, string & bldtime_str)
+void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string & vers_str, string & author_str)
 {
     if(!std::filesystem::exists(metafile))
         throw std::runtime_error("No meta detected");
+
+    #ifdef DEBUG_BUILD
+    cout << "Detacted meta.xml: " << metafile << endl;
+    #endif
+
     XMLDocument metaxml;
     metaxml.LoadFile(metafile.string().c_str());
-    XMLElement * update = metaxml.RootElement();
-    XMLElement * version = update->FirstChildElement("version");
-    XMLElement * build_time = update->FirstChildElement("build_time");
+    #ifdef DEBUG_BUILD
+    cout << "Meta file loaded: " << metafile.string() << endl;
+    #endif
 
-    vers_str = build_time->GetText();
-    bldtime_str = build_time->GetText();
+    XMLElement* update;
+    XMLElement* project;
+    XMLElement* version;
+    XMLElement* author;
 
+    if(!(update = metaxml.RootElement()))
+        throw std::runtime_error("No root element");
+    const char* build_time_c = update->Attribute("build_time");
+    if(!build_time_c)
+        throw std::runtime_error("No build time");
+    bldtime_str = build_time_c;
+
+    if(!(project = update->FirstChildElement("project_name")))
+        throw std::runtime_error("No project name element found");
+    const char* proj_name_c = project->GetText();
+    if(!proj_name_c)
+        throw std::runtime_error("Unable to read project name");
+    proj_name = proj_name_c;
+
+    if(!(version = update->FirstChildElement("version")))
+        throw std::runtime_error("No version element found");
+    const char* vers_str_c = version->GetText();
+    if(!vers_str_c)
+        throw std::runtime_error("Unable to read version");
+    vers_str = vers_str_c;
+
+    if(!(author = update->FirstChildElement("author")))
+        throw std::runtime_error("No author element found");
+    const char* author_str_c = author->GetText();
+    if(!author_str_c)
+        throw std::runtime_error("Unable to read author");
+    author_str = author_str_c;
+
+    cout << "Project " << proj_name << " build at " << bldtime_str << endl;
+    cout << "by " << author_str << " has " << vers_str << "version" << endl;
+
+    #ifndef DEBUG_BUILD
     if(!std::filesystem::remove(metafile))
         throw std::runtime_error("Unknown error");
+    #endif
 }
 
 void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
