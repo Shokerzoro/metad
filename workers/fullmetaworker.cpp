@@ -7,10 +7,10 @@
 #include <signal.h>
 #include <errno.h>
 
-#include "meta.h"
-#include "tstring.h"
-#include "mainfunc.h"
-#include "xmlfunc.h"
+#include "../meta.h"
+#include "../tstring.h"
+#include "../mainfunc.h"
+#include "../xmlfunc.h"
 
 #define DIRMASK (IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_ONLYDIR)
 #define FILEMASK (IN_MODIFY | IN_DELETE_SELF | IN_DONT_FOLLOW)

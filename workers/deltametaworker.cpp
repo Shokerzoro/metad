@@ -10,11 +10,11 @@
 #include <exception>
 #include <vector>
 
-#include "mainfunc.h"
-#include "threaddatacontainer.h"
-#include "xmlfunc.h"
-#include "meta.h"
-#include "tstring.h"
+#include "../mainfunc.h"
+#include "../threaddatacontainer.h"
+#include "../xmlfunc.h"
+#include "../meta.h"
+#include "../tstring.h"
 
 using namespace tinyxml2;
 using std::cout;
