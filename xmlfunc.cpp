@@ -80,7 +80,7 @@ void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string 
     author_str = author_str_c;
 
     cout << "Project " << proj_name << " build at " << bldtime_str << endl;
-    cout << "by " << author_str << " has " << vers_str << "version" << endl;
+    cout << "by " << author_str << " has " << vers_str << "version " << endl;
 
     #ifndef DEBUG_BUILD
     if(!std::filesystem::remove(metafile))

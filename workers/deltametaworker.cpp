@@ -59,8 +59,12 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     cout << "delta_metad_worker starts routine" << endl;
     #endif // DEBUG_BUILD
 
-    while ((ioctl = recvheader(sockfd, header, buffer)) > 0) //Цикл чтения запросов
+    while (true) //Цикл чтения запросов
     { try {
+        ioctl = recvheader(sockfd, header, buffer);
+        if(ioctl < 0)
+            throw std::runtime_error("Connection lost");
+
         if(state == State::NONE) //Первый запрос
         {
             if(header == "UNET-MES") //Uniter Network for Manufacturing Execution Systems

@@ -30,7 +30,7 @@ using Path = std::filesystem::path;
 using Direntry = std::filesystem::directory_entry;
 using ThreadList = std::list<ThreadDataContainer*>;
 
-extern void full_metad_worker(Path & snap_dir);
+extern void full_metad_worker(Path & snap_dir, int alrmtime);
 extern void* delta_metad_worker(void* data);
 extern void become_daemon(string logpath);
 void crash_reporter(int sig);
@@ -40,111 +40,7 @@ Path meta;
 
 int main(int argc, char** argv)
 {
-    if(argc == 3 || argc == 4) //Отработка как утилита без -demonize
-    {
-        //Строки для дальнейшей работы
-        string date = get_current_time(); //Дата
-        string calltype = argv[1]; //Тип вызова
-        target = Path(argv[2]); //Целевая директория
-        if (target.string().back() != '/') { target += '/'; }
-        meta = target; //Директория сохранения метаданных, по умолчанию таргет
-        string docname; //Имя нового документа в зависимости от вызова
-        string fulldocname; //Полное имя документа
-
-        if(argc == 4) //Изменение директории по-умолчанию
-        { meta = Path(argv[3]); if (meta.string().back() != '/') { meta += '/'; } }
-
-        //Проверка существования каталогов
-        if(!std::filesystem::exists(target))
-        { cout << "Error target directory path: " << target << endl; exit(1); }
-        if(!std::filesystem::exists(meta))
-        { cout << "Error target directory path: " << meta << endl; exit(1); }
-
-        #ifdef DEBUG_BUILD
-        cout << "Calltype: " << calltype << endl;
-        cout << "Target directory: " << target << endl;
-        cout << "Meta directory: " << meta << endl;
-        #endif // debug
-
-        ////Создание XML документа и корневого элемента
-        XMLDocument new_XML_doc;
-        XMLElement* update = new_XML_doc.NewElement("update");
-        new_XML_doc.InsertFirstChild(update);
-
-        //Разделение алгоритма работы
-        if(calltype == "full") //Одноразовая генерация full-meta
-        {
-            //Дописываем атрибуты
-            update->SetAttribute("date", date.c_str());
-            update->SetAttribute("filedir", target.string().c_str());
-
-            //Формируем полное имя документа
-            docname = "full-meta-" + date + ".XML";
-            fulldocname = meta.string() + docname;
-
-            //Входим в рекурсию
-            Direntry target_dir(target);
-            full_dmeta(update, target_dir, target);
-        }
-        else //Одноразовая генерация дельты
-        {
-            //Полные пути до старого и актуального документов
-            Path old_meta_path = (target.string() + "full-meta-" + calltype + ".XML");
-            Path actual_meta_path;
-            string actualdate;
-            get_actual(target, actual_meta_path, actualdate);
-
-            if(!std::filesystem::exists(old_meta_path))
-                throw std::runtime_error("Error old meta XML doc path: " + old_meta_path.string());
-            if(!std::filesystem::exists(actual_meta_path))
-                throw std::runtime_error("Error actual meta XML doc path:" + actual_meta_path.string());
-
-
-            #ifdef DEBUG_BUILD
-            cout << "Old full-meta XML doc: " << old_meta_path << endl;
-            cout << "Actual full-meta XML doc: " << actual_meta_path << endl;
-            #endif // debug
-
-            //Формируем имя файла и ищем, если существует
-            docname = "delta-meta-" + calltype + "-" + actualdate + ".XML";
-            fulldocname = meta.string() + docname;
-            if(std::filesystem::exists(fulldocname))
-            {
-                cout << "Delta XML already exists: " << fulldocname << endl;
-                exit(0);
-            }
-
-            XMLDocument old_XML_doc;
-            XMLDocument actual_XML_doc;
-            #ifdef DEBUG_BUILD
-            cout << "Old full-meta opening" << endl;
-            #endif // debug(struct sockaddr*)
-
-            open_XML_doc(old_XML_doc, old_meta_path.string().c_str());
-            #ifdef DEBUG_BUILD
-            cout << "Actual full-meta opening" << endl;
-            #endif // debug
-            open_XML_doc(actual_XML_doc, actual_meta_path.string().c_str());
-
-            //Открывает root элементы и добавляем аттрибут filedir
-            XMLElement* oldupdate = old_XML_doc.RootElement();
-            XMLElement* actualupdate = actual_XML_doc.RootElement();
-            const char* actualfiledir = actualupdate->Attribute("filedir");
-            update->SetAttribute("date", actualdate.c_str());
-            update->SetAttribute("filedir", actualfiledir);
-
-            //Вызываем рекурсивную функцию
-            delta_dmeta(oldupdate, actualupdate, update);
-        }
-
-        //Сохранение
-        #ifdef DEBUG_BUILD
-        cout << "Saving new file: " << fulldocname << endl;
-        #endif // DEBUG_BUILD
-        new_XML_doc.SaveFile(fulldocname.c_str());
-
-    }
-    else if (((argc == 6) || (argc == 7)) && (strcmp(argv[4], "demonize") == 0)) //Отработка как демон
+    if (((argc == 6) || (argc == 7)) && (strcmp(argv[4], "demonize") == 0))
     {
         //Добавим краш-репорты
         signal(SIGABRT, crash_reporter);
@@ -166,7 +62,15 @@ int main(int argc, char** argv)
             if(!std::filesystem::exists(snap_dir))
                 std::filesystem::create_directory(snap_dir);
 
-            full_metad_worker(snap_dir); //Бесконечная работа демонаъ
+            string alrm_str = argv[6];
+            int alrmtime = -1;
+            try { alrmtime = std::stoi(alrm_str); }
+            catch(exception & ex)
+            { cout << "alrmtime arg error" << ex.what() << endl; exit(1); }
+            if((alrmtime <= 0) || (alrmtime > 2*24*60*60))
+            { cout << "Wrong port alrmtime: " << alrmtime << endl; exit(1); }
+
+            full_metad_worker(snap_dir, alrmtime); //Бесконечная работа демонаъ
 
 		} //Демон full-meta
         if(calltype == "delta") //Демон delta-meta
