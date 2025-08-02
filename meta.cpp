@@ -10,19 +10,19 @@
 
 #include "xmlfunc.h"
 #include "mainfunc.h"
+#include "net/netfunc.h"
 #include "tstring.h"
 
 using namespace tinyxml2;
-using std::string;
-using std::cout;
-using std::cerr;
-using std::endl;
 using Direntry = std::filesystem::directory_entry;
 using Diriter = std::filesystem::directory_iterator;
 using Path = std::filesystem::path;
 using std::exception;
 
-void add_news(XMLElement* update, XMLElement* actual);
+//Функция, которая рекурсивно добавляет записи о новых файлах и каталогах
+//Вызывается из delta_dmeta, когда завершена отработка наименьшего множества каталогов
+//И остались новые записи каталогов (новые каталоги и файлы внутри)
+static void add_news(XMLElement* update, XMLElement* actual);
 
 void full_dmeta(XMLElement* parent, Direntry & dir, Path & target)
 {
@@ -37,23 +37,21 @@ void full_dmeta(XMLElement* parent, Direntry & dir, Path & target)
         if(newdirentry.is_directory() && !newdirentry.is_symlink())
         {
             #ifdef DEBUG_BUILD
-            cout << newdirentry.path() << ":   " << "directory" << endl;
+            std::cout << newdirentry.path() << ":    directory" << std::endl;
             #endif // debug
 
             //Запись XML элемента - директории
-
             XMLElement* newdirelement = parent->InsertNewChildElement("directory");
             set_XML_attr(newdirelement, newdirentry, target);
 
             //Рекурсия
             full_dmeta(newdirelement, newdirentry, target);
-
         }
         //Если это файл, добавляем запись и идем дальше
         else if(newdirentry.is_regular_file() && !newdirentry.is_symlink())
         {
             #ifdef DEBUG_BUILD
-            cout << newdirentry.path() << ":   " << "file" << endl;
+            std::cout << newdirentry.path() << ":   " << "file" << std::endl;
             #endif // debug
 
             //Запись XML элемента - файла
@@ -65,7 +63,7 @@ void full_dmeta(XMLElement* parent, Direntry & dir, Path & target)
     }
     catch(exception & ex)
     {
-        cout << "Error: " << ex.what() << endl;
+        std::cout << "Error: " << ex.what() << std::endl;
         return;
     }
 }
@@ -73,12 +71,11 @@ void full_dmeta(XMLElement* parent, Direntry & dir, Path & target)
 //Принимает указатеи на элементы, которые являются "каталогами"
 void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
 {
+    //!!! - - - - - - начало отработки файлов
     // Инициализация итераторов
     XMLElement* oldviter = oldv->FirstChildElement("file"); //Элемент из старого XML документа
     XMLElement* actualviter = actualv->FirstChildElement("file"); //Элемент из актуального
-
-    //Отработка только файлов
-    while(oldviter && actualviter)
+    while(oldviter && actualviter) //Отработка в интервале наименьшего множества записей (только файлы)
     {
         // Случай совпадения путей
         if(cmp_XML_path(oldviter, actualviter))
@@ -90,23 +87,27 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                 XMLElement* newfile = update->InsertNewChildElement("newfile");
                 const char* newpath = actualviter->Attribute("path");
                 const char* weigth = actualviter->Attribute("weight");
+                const char* hash = actualviter->Attribute("sha256");
                 newfile->SetAttribute("path", newpath);
                 newfile->SetAttribute("weight", weigth);
+                newfile->SetAttribute("sha256", hash);
             }
             // Переходим к следующим элементам
             oldviter = oldviter->NextSiblingElement("file");
             actualviter = actualviter->NextSiblingElement("file");
         }
-        // Случай несовпадения путей
+        // Случай несовпадения путей (т.е. либо новая запись actualiter либо отсутсвует старая)
         else {
-            // Ищем файл в актуальной версии
+            //Проверка следующим способом: создаем временный итератор curriter, которым проходим актуальную версию
+            //Либо до, конца либо до совпадения путей
             XMLElement* curriter = actualviter;
             while(curriter && !cmp_XML_path(oldviter, curriter))
             {
                 curriter = curriter->NextSiblingElement("file");
             }
 
-            // Если файл не найден в актуальной версии
+            // Если файл не найден в актуальной версии, значит отсутсвует старая запись (файл удален)
+            // Формируем запись удаления и итерируем oldviter на следующую позицию
             if(!curriter)
             {
                 // Создаем элемент удаления
@@ -115,7 +116,8 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                 delfile->SetAttribute("path", delpath);
                 oldviter = oldviter->NextSiblingElement("file");
             }
-            // Если файл найден, но между actualviter и curriter есть новые файлы
+            // Если файл найден, то в интервале между actualviter и временным итератором curriter есть новые записи
+            // Мы проходим этот интервал и добавляем записи о новом файле
             else
             {
                 // Отработка добавленные файлы
@@ -125,16 +127,21 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                     XMLElement* newfile = update->InsertNewChildElement("newfile");
                     const char* newpath = temp->Attribute("path");
                     const char* weigth = temp->Attribute("weight");
+                    const char* hash = temp->Attribute("sha256");
                     newfile->SetAttribute("path", newpath);
                     newfile->SetAttribute("weight", weigth);
+                    newfile->SetAttribute("sha256", hash);
+
                     temp = temp->NextSiblingElement("file");
                 }
                 // Возвращаемся к обработке текущего файла
                 actualviter = curriter->NextSiblingElement("file");
             }
         }
-    }
+    } //Отработка в интервале наименьшего множества записей (только файлы)
 
+    //Когда одно из множеств (либо старые, либо новые записи) закончилось, остаются следующие варианты
+    //Либо есть необработаные старые записи (значит они удалены), либо новые записи (значит новые файлы)
     // Отработка оставшихся файлов в oldviter (удаленные файлы)
     while(oldviter)
     {
@@ -150,16 +157,18 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
         XMLElement* newfile = update->InsertNewChildElement("newfile");
         const char* newpath = actualviter->Attribute("path");
         const char* weigth = actualviter->Attribute("weight");
+        const char* hash = actualviter->Attribute("sha256");
         newfile->SetAttribute("path", newpath);
         newfile->SetAttribute("weight", weigth);
+        newfile->SetAttribute("sha256", hash);
         actualviter = actualviter->NextSiblingElement("file");
     }
+    //!!! - - - - - - конец отработки файлов
 
-    // Обработка каталогов с рекурсией
+    //!!! - - - - - - начало отработки каталогов
     XMLElement* olddir = oldv->FirstChildElement("directory");
     XMLElement* newdir = actualv->FirstChildElement("directory");
-
-    while (olddir && newdir)
+    while (olddir && newdir) //Отработка наименьшего множества записей
     {
         const char* oldpath = olddir->Attribute("path");
         const char* newpath = newdir->Attribute("path");
@@ -212,8 +221,9 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                 olddir = olddir->NextSiblingElement("directory");
             }
         }
-    }
+    } //Отработка наименьшего множества записей
 
+    //Аналогичная ситуация после отработки наименьшего множества записей
     // Удалённые каталоги
     while (olddir)
     {
@@ -222,17 +232,18 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
         olddir = olddir->NextSiblingElement("directory");
     }
 
-    // Добавленные каталоги
+    // Добавленные новых каталогов и новых файлов внутри них
     while (newdir) //Элемент, который мы парсим
     {
         XMLElement* newd = update->InsertNewChildElement("newdir"); //Новый элемент в update
         newd->SetAttribute("path", newdir->Attribute("path"));
 
-        // Обработка файлов в директории
+        // Добавленные новых каталогов и новых файлов внутри них
         add_news(newd, newdir);
 
         newdir = newdir->NextSiblingElement("directory");
     }
+    //!!! - - - - - - конец отработки каталогов
 }
 
 //Отправка данных, при парсинге файла delta-meta
@@ -240,13 +251,14 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
 {
     XMLElement* xmliter = nullptr;
     uint16_t header_size;
+    size_t bytes_readed;
+    std::string header, tag, value, relpath, fullname;
 
-    for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile")) //Цикл отправки файлов
+    //Цикл отправки файлов
+    for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile"))
     {
-        string tag("NEWFILE:");
-        string header;
-        string relpath, weightstr, fullname;
-        int ioctl, fd; //Дескриптор файла для sendfile
+        string weightstr;
+        int fd; //Дескриптор файла для sendfile
 
         try {
             relpath = xmliter->Attribute("path");
@@ -264,114 +276,116 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
                 throw std::runtime_error("Ошибка открытия файла: " + fullname);
 
             //Отправим заголовок и ждем подтверждения
-            ioctl = sendheader(sockfd, relpath, buffer);
-            ioctl = recvheader(sockfd, header, buffer);
-            if(header != "NEED")
-                continue;
+            header = build_header(TagStrings::NEWFILE, relpath.c_str());
+            bytes_readed = sendheader(sockfd, header, buffer);
+            bytes_readed = recvheader(sockfd, header, buffer);
+            parse_header(header, tag, value);
 
-            //Отправляем файл
-            ioctl = send_file(sockfd, fd, weight, buffer);
-            if(ioctl == -1)
+            if (tag == TagStrings::NEWFILE && value == TagStrings::AGREE) //Отправляем файл
             {
-                close(fd);
-                throw std::runtime_error("Error while sending file" + fullname);
+                bytes_readed = send_file(sockfd, fd, weight, buffer);
+                if(bytes_readed != weight)
+                {
+                    close(fd);
+                    throw std::runtime_error("Error while sending file" + fullname);
+                }
+
+                //И не забываем закрыть файл если все прошло успешно
+                if(close(fd) == -1)
+                    throw std::runtime_error("File closing error: " + fullname);
+
+                #ifdef DEBUG_BUILD
+                std::cout << "Newfile sent: " << relpath << std::endl;
+                #endif // DEBUG_BUILD
             }
-
-            //И не забываем закрыть файл если все прошло успешно
-            if(close(fd) == -1)
-                throw std::runtime_error("File closing error: " + fullname);
-
-            #ifdef DEBUG_BUILD
-            cout << "NEWFILE SENT: " << relpath << endl;
-            #endif // DEBUG_BUILD
-        }
-        catch(std::invalid_argument & ex) //Не критичное исключение, а критыные выбрасывают в отказ на одной процедуре ниже
+            else if (tag == TagStrings::NEWFILE && value == TagStrings::REJECT)
+            {
+                #ifdef DEBUG_BUILD
+                std::cout << "File rejected: " << relpath << std::endl;
+                #endif
+            }
+            else
+                throw std::invalid_argument("Unpropriate newfile answer");
+        } //Блок try цикла отправки файлов
+        catch(std::invalid_argument & ex) //Не критичное исключение, а выбрасывают в отказ на одной процедуре ниже
         {
-            cerr << "Got error: " << ex.what() << endl;
+            std::cerr << "Got error: " << ex.what() << std::endl;
             xmliter = xmliter->NextSiblingElement("newfile");
             continue;
         } } //Цикл отправки файлов
 
-    xmliter = xmlel->FirstChildElement("delfile");
-    while(xmliter) //Цикл отправки файлов на удаление
+    //Цикл отправки файлов на удаление
+    for(xmliter = xmlel->FirstChildElement("delfile"); xmliter; xmliter = xmliter->NextSiblingElement("delfile"))
     {
-        string tag("DELFILE:");
-        string relpath(xmliter->Attribute("path"));
+        relpath = xmliter->Attribute("path");
 
         try {
-            string header = tag + relpath;
-            int ioctl = sendheader(sockfd, header, buffer);
+            header = build_header(TagStrings::DELFILE, relpath.c_str());
+            bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            cout << "DELFILE SENT: " << relpath << endl;
+            std::cout << "DELFILE SENT: " << relpath << std::endl;
             #endif // DEBUG_BUILD
         }
         catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
         {
-            cerr << "Got error: " << ex.what() << endl;
-            xmliter = xmliter->NextSiblingElement("newfile");
+            std::cerr << "Got error: " << ex.what() << std::endl;
             continue;
         }
-
-        xmliter = xmliter->NextSiblingElement("delfile");
     }  //Цикл отправки файлов на удаление
 
-    xmliter = xmlel->FirstChildElement("deldir");
-    while(xmliter) // Цикл удаления каталогов
+    // Цикл удаления каталогов
+    for(xmliter = xmlel->FirstChildElement("deldir"); xmliter; xmliter = xmliter->NextSiblingElement("deldir"))
     {
-        string tag("DELDIR:");
-        string relpath(xmliter->Attribute("path"));
+        relpath = xmliter->Attribute("path");
 
         try {
-            string header = tag + relpath;
-            int ioctl = sendheader(sockfd, header, buffer);
+            header = build_header(TagStrings::DELDIR, relpath.c_str());
+            bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            cout << "DELDIR SENT: " << relpath << endl;
+            std::cout << "DELDIR SENT: " << relpath << std::endl;
             #endif // DEBUG_BUILD
         }
         catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
         {
-            xmliter = xmliter->NextSiblingElement("newfile");
+            std::cout << "Invalid arg while deldir proccecing: " << ex.what() << std::endl;
             continue;
         }
-
-        xmliter = xmliter->NextSiblingElement("deldir");
     } // Цикл удаления каталогов
 
-    xmliter = xmlel->FirstChildElement("newdir");
-    while(xmliter) //Цикл рекурсивной обработки новых каталогов
+    //Цикл рекурсивной обработки новых каталогов
+    for(xmliter = xmlel->FirstChildElement("newdir"); xmliter; xmliter = xmliter->NextSiblingElement("newdir"))
     {
-        string tag("NEWDIR:");
-        string relpath(xmliter->Attribute("path"));
+        relpath = xmliter->Attribute("path");
 
         try {
-            string header = tag + string(relpath);
-            int ioctl = sendheader(sockfd, header, buffer);
+            header = tag + string(relpath);
+            bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            cout << "NEWDIR SENT: " << relpath << endl;
+            std::cout << "NEWDIR SENT: " << relpath << std::endl;
             #endif // DEBUG_BUILD
         }
         catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
         {
-            cerr << "Got error: " << ex.what() << endl;
-            xmliter = xmliter->NextSiblingElement("newfile");
+            std::cerr << "Got error: " << ex.what() << std::endl;
             continue;
         }
 
         send_delta(sockfd, xmliter, filedir, buffer); //Recurion
-        xmliter = xmliter->NextSiblingElement("newdir");
     }  //Цикл рекурсивной обработки новых каталогов
 
-    xmliter = xmlel->FirstChildElement("directory");
-    while(xmliter) //Цикл обработки директорий, которые не попадают ни в одну категорию
+    //Цикл обработки директорий, которые не попадают ни в одну категорию
+    for(xmliter = xmlel->FirstChildElement("directory"); xmliter; xmliter = xmliter->NextSiblingElement("directory"))
     {
         send_delta(sockfd, xmliter, filedir, buffer);  //Recurion
-        xmliter = xmliter->NextSiblingElement("directory");
     } //Цикл обработки директорий, которые не попадают ни в одну категорию
 }
 
+//Функция, которая рекурсивно добавляет записи о новых файлах и каталогах
+//Вызывается из delta_dmeta, когда завершена отработка наименьшего множества каталогов
+//И остались новые записи каталогов (новые каталоги и файлы внутри)
 void add_news(XMLElement* update, XMLElement* actual)
 {
     // Обработка файлов

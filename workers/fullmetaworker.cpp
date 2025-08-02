@@ -5,7 +5,6 @@
 #include <tinyxml2.h>
 #include <sys/inotify.h>
 #include <signal.h>
-#include <errno.h>
 
 #include "../meta.h"
 #include "../tstring.h"
@@ -18,15 +17,8 @@
 #define BYTE (size_t)1
 
 using namespace tinyxml2;
-using std::string;
-using std::cout;
-using std::cerr;
-using std::endl;
-using std::map;
-using std::exception;
-using Pair = std::pair<int, string>;
-using IMap = std::map<int, string>;
-
+using Pair = std::pair<int, std::string>;
+using IMap = std::map<int, std::string>;
 using Path = std::filesystem::path;
 using Direntry = std::filesystem::directory_entry;
 using Diriter = std::filesystem::directory_iterator;
@@ -37,7 +29,7 @@ int clear_mapper(IMap & mapper);
 
 static void sigalarm_hdl(int sigid); //Установка обработчика таймера
 //Сохраняет с именем fullmeta-version
-static void generate_fullxml(string & bldtime_str, string & proj_name, string & version, string & author_str);
+static void generate_fullxml(std::string & bldtime_str, std::string & proj_name, std::string & version, std::string & author_str);
 static void update_inotify(void); //Апдейтим инотифай
 
 static int upflag; // Флаг входа обработчика SIGALRM
@@ -56,67 +48,62 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
     }
     catch(std::runtime_error & err)
     {
-        cout << "runtime_error: " << err.what() << endl;
+        std::cout << "runtime_error: " << err.what() << std::endl;
         exit(1);
     }
 
-    IMap mapper;
-    string build_time, project_name, version, author;
+    //Необходимые переменные
+    std::string build_time, project_name, version, author; //Получаем из meta.xml
+    IMap mapper; //Контейнер путь/inotify obj
     Path metafile = target / "meta.XML";
     Path new_snap;
 
     //Проходим по всему таргету наблюдателем
     inotify_loop(infd, target, mapper);
 
-    cout << "Full metadata configured." << endl;
-    cout << "Stated at: " << get_current_time() << endl;
-    cout << "Waiting events in target: " << target.string() << endl;
+    std::cout << "Full metadata configured." << std::endl;
+    std::cout << "Stated at: " << get_current_time() << std::endl;
+    std::cout << "Waiting events in target: " << target.string() << std::endl;
 
     while (true)
     { //Бесконечный цикл работы воркера
 
-        #ifdef DEBUG_BUILD
-        cout << "Making blocking reading." << endl;
-        #endif
-
         //Тут чтение, которое либо прерывается сигналом, либо прочитывает события инотифай
-
         ssize_t readed = read(infd, buf, sizeof(buf));
 
         if (upflag == 1) //fullmeta generating
         {
             #ifdef DEBUG_BUILD
-            cout << "Upflag is: " << upflag << " Time to generate data" << endl;
+            std::cout << "Time to generate new version" << std::endl;
             #endif
             upflag = 0;
 
+            //Тут установка на блокирование всех отслеживаемых файлов
+
             try {
+                //Получаем метаданные о новой версии
                 get_meta(metafile, build_time, project_name, version, author);
+                //Генерируем fullmeta xml и сохраняем
+                generate_fullxml(build_time, project_name, version, author);
+
+                //Делаем снэп новой версии
+                new_snap = snap_dir / version;
+                if(std::filesystem::exists(new_snap))
+                    throw std::invalid_argument("Attempt to rewrite version");
+                std::filesystem::create_directory(new_snap);
+                const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
+                std::filesystem::copy(target, new_snap, CopyOptions);
+                std::cout << "version " <<  version << " duplicated to " <<  snap_dir <<  std::endl;
             }
             catch(std::exception & ex)
             {
-                //Логируем
-                cerr << "Got exception getting metadata: " << ex.what() << endl;
+                std::cerr << "WARNING: error occured" << std::endl;
+                std::cerr << "Got exception while generating fullxml: " << ex.what() << std::endl;
                 continue;
             }
 
-            //Генерируем fullmeta xml и сохраняем
-            generate_fullxml(build_time, project_name, version, author);
-
-            //Копируем версию
-            new_snap = snap_dir / version;
-            if(std::filesystem::exists(new_snap))
-            {
-                cout <<  "Attempt to rewrite version: " <<  version << endl;
-                continue;
-            }
-
-            std::filesystem::create_directory(new_snap);
-            const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
-            std::filesystem::copy(target, new_snap, CopyOptions);
-
-            //Логируем
-            cout << "version " <<  version << " duplicated to " <<  snap_dir <<  endl;
+            std::cout << "Fullmeta of project " << project_name << "generated" << std::endl;
+            std::cout << "Current version: " << version << " build by " << author << std::endl;
 
         }  //fullmeta generating
         else //inotify updating
@@ -132,22 +119,18 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                     continue;
                 }
 
-                string base = fiter->second;
+                std::string base = fiter->second;
                 if (!base.empty() && base.back() != '/') base += "/";
 
                 if (event->mask & IN_MODIFY)
                 {
                     alarm(alrmtime);
-                    #ifdef DEBUG_BUILD
-                    cout << "File modified: " << base << endl;
-                    #endif
+                    std::cout << "File modified: " << base << std::endl;
                 }
 
                 if (event->mask & IN_DELETE_SELF)
                 {
-                    #ifdef DEBUG_BUILD
-                    cout << "File or dir deleted (self): " << base << endl;
-                    #endif
+                    std::cout << "File or dir deleted (self): " << base << std::endl;
                     mapper.erase(fiter);
                     clear_mapper(mapper);
                     alarm(alrmtime);
@@ -157,25 +140,21 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 {
                     if (event->mask & IN_CREATE)
                     {
-                        string fullname = base + event->name;
+                        std::string fullname = base + event->name;
                         Direntry newentry(fullname);
                         int wd = watch_path(infd, newentry, FILEMASK);
                         if (wd != -1) mapper.insert(Pair(wd, fullname));
-                        #ifdef DEBUG_BUILD
-                        cout << "File created: " << fullname << endl;
-                        #endif
+                        std::cout << "File created: " << fullname << std::endl;
                         alarm(alrmtime);
                     }
                 } else
                 {
                     if (event->mask & IN_CREATE)
                     {
-                        string fullname = base + event->name;
+                        std::string fullname = base + event->name;
                         Path newdir(fullname);
                         inotify_loop(infd, newdir, mapper);
-                        #ifdef DEBUG_BUILD
-                        cout << "Dir created: " << fullname << endl;
-                        #endif
+                        std::cout << "Dir created: " << fullname << std::endl;
                         alarm(alrmtime);
                     }
                 }
@@ -187,13 +166,10 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
 }
 
 //Генерация и сохранение fullmetaxml
-static void generate_fullxml(string & bldtime_str, string & proj_name, string & version, string & author_str)
+static void generate_fullxml(std::string & bldtime_str, std::string & proj_name, std::string & version, std::string & author_str)
 {
-    string docname = "full-meta-" + version + ".XML";
+    std::string docname = "full-meta-" + version + ".XML";
     Path fulldocname = meta / docname;
-
-    //Логируем
-    cout << "Update generating: " << version << endl;
 
     XMLDocument new_XML_doc;
     XMLElement* update = new_XML_doc.NewElement("update");
@@ -210,19 +186,14 @@ static void generate_fullxml(string & bldtime_str, string & proj_name, string & 
     new_XML_doc.SaveFile(fulldocname.c_str());
 
     //Логируем
-    cout << "Fullmetaxml file generated and saved: " <<  fulldocname << endl;
+    std::cout << "Fullmetaxml file generated and saved: " <<  fulldocname << std::endl;
 }
 
 void sigalarm_hdl(int sigid)
 {
     #ifdef DEBUG_BUILD
-    cout << "I am handler: ";
-    cout << "fot alarm signal: " << sigid << endl;
-    cout << "Upflag was: " << upflag;
+    std::cout << "Fot alarm signal: " << sigid << std::endl;
     #endif
     upflag = 1;
-    #ifdef DEBUG_BUILD
-    cout << ". Now its: " << upflag << endl;
-    #endif // debug
 }
 

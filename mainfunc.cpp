@@ -1,21 +1,26 @@
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <filesystem>
-#include <exception>
+#include <vector>
+#include <map>
+#include <algorithm>
+#include <stdexcept>
 #include <tinyxml2.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
-#include <cstdint>
-#include <algorithm>
-#include <arpa/inet.h>
 #include <errno.h>
 #include <signal.h>
-#include <vector>
 #include <sys/inotify.h>
-#include <sys/sendfile.h>
-#include <map>
+#include <sys/stat.h>
+#include <openssl/sha.h>
 
 #include "tstring.h"
 
@@ -33,9 +38,7 @@ using Diriter = std::filesystem::directory_iterator;
 using Pair = std::pair<int, string>;
 using IMap = std::map<int, string>;
 
-static uint16_t fill_buff(const astring & input, std::vector<char> & buffer);
-static size_t readsocket(const int sockfd, std::vector<char> & buffer, const size_t bytes, const int flags = 0);
-static size_t writesocket(const int sockfd, const std::vector<char> & buffer, const size_t bytes, const int flags = 0);
+
 
 // - - - - - - - - - - - - - - Работа с потоками и сигналами - - - - - - - - - - - - - -
 void become_daemon(string logpath)
@@ -226,6 +229,41 @@ void get_actual(const Path & meta_dir, Path & actual_meta_path, string & actuald
     }
     actual_meta_path = latest_file;
     actualdate = tstring(latest_btime);
+} //Get actual
+
+//Парсим хэдер на тэг и ценность
+void parse_header(const std::string & header, std::string & tag, std::string & value)
+{
+    size_t pos = header.find(':');
+    if (pos == std::string::npos)
+        throw std::invalid_argument("Invalid header");
+
+    tag = string(header.begin(), header.begin() + pos);
+    value = string(header.begin() + pos + 1, header.end());
+} //Parse header
+
+//Получение хэша sha256 по файлу
+std::string computeFileSHA256(const std::string& filePath)
+{
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file) throw std::runtime_error("Cannot open file");
+
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+
+    char buffer[4096];
+    while (file.read(buffer, sizeof(buffer)))
+    SHA256_Update(&sha256, buffer, file.gcount());
+    SHA256_Update(&sha256, buffer, file.gcount());  // для оставшихся байт
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_Final(hash, &sha256);
+
+    std::ostringstream result;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        result << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+
+    return result.str();
 }
 
 string get_current_time(void)
@@ -233,85 +271,4 @@ string get_current_time(void)
     std::time_t raw_time = std::time(nullptr);
     tstring timestr(raw_time);
     return timestr;
-}
-
-// - - - - - - - - - - - - - - Работа с сетью - - - - - - - - - - - - - -
-uint16_t fill_buff(const astring & input, std::vector<char> & buffer)
-{
-    long unsigned headlength = input.length(); //Кол-во символов без терминального нуля
-    uint16_t filled = static_cast<uint16_t>(headlength);
-    if(headlength > BUFFSIZE - 6)
-        throw std::invalid_argument("Too big msg to header"); //4 байта для размера тела
-
-    buffer.clear();
-    buffer.push_back(static_cast<char>((filled >> 8) & 0xFF));
-    buffer.push_back(static_cast<char>((filled >> 0) & 0xFF));  // Записываем в обратном порядке байтов
-    for(auto iter = input.begin(); iter != input.end(); iter++)
-        buffer.push_back(*iter);
-
-    return filled+2;
-}
-
-size_t readsocket(const int sockfd, std::vector<char> & buffer, const size_t bytes, const int flags)
-{
-    ssize_t readed = recv(sockfd, buffer.data(), bytes, flags);
-    if((readed == 0) && (bytes != 0))
-        throw std::runtime_error("Connection is broken possibly");
-    if(readed == -1)
-        throw std::runtime_error("Syscall recv error: " + string(strerror(errno)));
-    return static_cast<size_t>(readed);
-}
-
-size_t writesocket(const int sockfd, const std::vector<char> & buffer, const size_t bytes, const int flags)
-{
-    ssize_t written = send(sockfd, buffer.data(), bytes, flags);
-    if((written == 0) && (bytes != 0))
-        throw std::runtime_error("Connection is broken possibly");
-    if(written == -1)
-        throw std::runtime_error("Syscall send error: " + string(strerror(errno)));
-    return static_cast<size_t>(written);
-}
-
-size_t recvheader(const int sockfd, std::string & header, std::vector<char> & buffer)
-{
-    uint16_t header_size;
-    size_t ioctl = readsocket(sockfd, buffer, 2, 0);
-    memcpy(&header_size, buffer.data(), sizeof(header_size));
-    header_size = ntohs(header_size);
-    if(header_size < BUFFSIZE - 6)
-        throw std::runtime_error("Wrong header came");
-
-    ioctl += readsocket(sockfd, buffer, (size_t)header_size, 0);
-    header = string(buffer.data(), header_size);
-
-    return ioctl;
-}
-
-size_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer)
-{
-    uint16_t header_size = fill_buff(header, buffer);
-    return writesocket(sockfd, buffer, (size_t)header_size, 0);;
-}
-
-size_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer)
-{
-        buffer.clear();
-        buffer.push_back(static_cast<char>((weight >> 24) & 0xFF));
-        buffer.push_back(static_cast<char>((weight >> 16) & 0xFF));
-        buffer.push_back(static_cast<char>((weight >> 8) & 0xFF));
-        buffer.push_back(static_cast<char>((weight >> 0) & 0xFF)); //Записали вес файла
-        int ioctl = send(sockfd, buffer.data(), (size_t)4, MSG_MORE);
-
-        //Отправляем файл целиком
-        #ifndef DEBUG_BUILD
-        off_t offset = 0;
-        while (offset < weight)
-        {
-            ssize_t sent = sendfile(sockfd, fd, &offset, weight - offset);
-            if (sent <= 0) //Ошибка при передаче файла
-                return -1;
-        }
-        #endif // DEBUG_BUILD
-
-        return ioctl;
 }

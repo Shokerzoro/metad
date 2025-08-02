@@ -3,14 +3,12 @@
 
 #include <iostream>
 #include <filesystem>
-#include <vector>
 #include <map>
 #include "tstring.h"
 
-using std::string;
 using Path = std::filesystem::path;
-using Pair = std::pair<int, string>;
-using IMap = std::map<int, string>;
+using Pair = std::pair<int, std::string>;
+using IMap = std::map<int, std::string>;
 using Direntry = std::filesystem::directory_entry;
 using Diriter = std::filesystem::directory_iterator;
 
@@ -26,12 +24,8 @@ extern void inotify_loop(int infd, Path & target, IMap & mapper);
 extern void inoupdate(int infd, IMap & mapper);
 
 //Работа с файлами и строками
-extern void get_actual(const Path & dir_path, Path & actual_meta_path, string & actualdate); //Получение актуального файла
-extern string get_current_time(void) noexcept;
-
-//Работа с сетью
-extern size_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer); //Отправка целого файла
-extern size_t recvheader(const int sockfd, std::string & header, std::vector<char> & buffer); //Чтение хэдера из сокета
-extern size_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer); //запись хэдера в сокет
+extern void get_actual(const Path & dir_path, Path & actual_meta_path, std::string & actualdate); //Получение актуального файла
+extern std::string computeFileSHA256(const std::string& filePath); //Получение хэша sha256 по файлу
+extern std::string get_current_time(void) noexcept;
 
 #endif // MAINFUNC_H_INCLUDED

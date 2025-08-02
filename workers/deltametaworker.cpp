@@ -1,12 +1,7 @@
 #include <iostream>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <sstream>
-#include <errno.h>
-#include <string.h>
 #include <filesystem>
 #include <tinyxml2.h>
-#include <signal.h>
 #include <exception>
 #include <vector>
 
@@ -14,7 +9,8 @@
 #include "../threaddatacontainer.h"
 #include "../xmlfunc.h"
 #include "../meta.h"
-#include "../tstring.h"
+#include "../net/netfunc.h"
+#include "../exeptions/unaccaptable.h"
 
 using namespace tinyxml2;
 using std::cout;
@@ -39,21 +35,20 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     try {
         sockfd = this_thread->startrun(); //Захватываем мьютекс общего элемента
         mute_signals(); //Блокировка всех сигналов
-        //Чтение ключевого слова из сокета для исключения лишних запросов, check_protocol что то такое
     }
     catch(exception & ex) {
         cerr << ex.what();
         return this_thread->stoprun();
     }
 
-    string header;
+    string header, tag, value;
     vector<char> buffer(BUFFSIZE); //Отдельный буфер на каждый поток
     Path old_meta_path, actual_meta_path;
     string old_version, actual_version;
-    enum class State { NONE, PROPER, REQUESTED, APPROVED, AGREED };
+    enum class State { NONE, PROPER, APPROVED, AGREED };
     State state = State::NONE;
     int err_counter = 0;
-    size_t ioctl = 0; //Для возможности более тонкого контроля
+    size_t bytes_readed = 0; //Для возможности более тонкого контроля
 
     #ifdef DEBUG_BUILD
     cout << "delta_metad_worker starts routine" << endl;
@@ -61,74 +56,87 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
 
     while (true) //Цикл чтения запросов
     { try {
-        ioctl = recvheader(sockfd, header, buffer);
-        if(ioctl < 0)
+        //Получаем версию
+        bytes_readed = recvheader(sockfd, header, buffer);
+        if(bytes_readed < 0)
             throw std::runtime_error("Connection lost");
+        parse_header(header, tag, value);
 
-        if(state == State::NONE) //Первый запрос
+        if(state == State::NONE && tag == TagStrings::PROTOCOL) //Первый запрос, идентификация протокола
         {
-            if(header == "UNET-MES") //Uniter Network for Manufacturing Execution Systems
+            //Uniter Network for Manufacturing Execution Systems
+            if( value == TagStrings::UNETMES)
+            {
                 state = State::PROPER;
+                header = build_header(TagStrings::PROTOCOL, TagStrings::UNETMES);
+                sendheader(sockfd, header, buffer);
+            }
             else
                 return this_thread->stoprun();
-        }
-        if(state == State::PROPER) //Первый запрос
+        } //Первый запрос, идентификация протокола
+        if(state == State::PROPER && tag == TagStrings::VERSION) //Получаем версию
         {
-            if(header == "GETUPDATE")
-                state = State::REQUESTED;
-            else
-                throw std::invalid_argument("Wrong request");
-        }
-        if(state == State::REQUESTED) //Получаем старую
-        {
-            old_meta_path = target / ("full-meta-" + header + ".XML");
-            if(std::filesystem::exists(old_meta_path))
+            old_meta_path = target / ("full-meta-" + value + ".XML");
+            
+            if(std::filesystem::exists(old_meta_path)) //Если существует
             {
                 state = State::APPROVED;
-                old_version = header;
+                old_version = old_meta_path.string();
                 get_actual(target, actual_meta_path, actual_version);
 
                 if(old_meta_path == actual_meta_path) //обновлений нет
                 {
-                    ioctl = sendheader(sockfd, "NOUPDATE", buffer);
+                    header = build_header(TagStrings::PROTOCOL, TagStrings::NOUPDATE);
+                    bytes_readed = sendheader(sockfd, header, buffer);
                     return this_thread->stoprun();
                 }
                 else
                 {
-                    ioctl = sendheader(sockfd, "SOMEUPDATE", buffer);
+                    header = build_header(TagStrings::PROTOCOL, TagStrings::SOMEUPDATE);
+                    bytes_readed = sendheader(sockfd, header, buffer);
                 }
             }
             else
-                throw std::invalid_argument("Wrong version request: " + old_meta_path.string());
-        }
-        if(state == State::APPROVED)
+                throw Unacceptable("Wrong version request");
+        } //Получаем версию
+        if(state == State::APPROVED && tag == TagStrings::PROTOCOL) //Получаем подтверждение обновлений
         {
-            if(header == "AGREE") //Получаем согласие
+            if(value == "AGREE") //Получаем согласие
             {
                 state = State::AGREED;
+                header = build_header(TagStrings::VERSION, actual_version.c_str());
+                bytes_readed = sendheader(sockfd, header, buffer);
                 break;
             }
-            if(header == "REJECT") //Не хотят
+            if(header == "REJECT") //Получаем отказ
+            {
+                #ifdef DEBUG_BUILD
+                std::cout << "Client rejected getting update" << std::endl;
+                #endif
                 return this_thread->stoprun();
-
-            throw std::invalid_argument("Wrong answer");
-        }
-    }
-    catch(std::invalid_argument & ex)
+            } //Получаем подтверждение обновлений
+        } //Цикл чтения запросов
+    } //Try
+    catch (Unacceptable & ex)
     {
-        if(err_counter++ >= 3)
-        {
-            cerr << "Client error: " << ex.what() << endl;
-            sendheader(sockfd, "GOODBYE", buffer);
-            return this_thread->stoprun();
-        }
-        continue;
+        std::cerr << "Got unaccaptable exeption" << std::endl;
+        std::cerr << ex.what() << std::endl;
+        return this_thread->stoprun();
     }
     catch(std::runtime_error & ex)
     {
         cerr << "Runtime error: " << ex.what() << endl;
         return this_thread->stoprun();
-    } } //Цикл чтения запросов
+    }
+    catch(std::invalid_argument & ex)
+    {
+        if(err_counter++ >= 3)
+        {
+            std::cerr << "Client error: protocol exeptions limitated" << std::endl;
+            return this_thread->stoprun();
+        }
+        continue;
+    } } //Обработка исключений цикла чтения запросов
 
     #ifdef DEBUG_BUILD
     cout << "Old full-meta XML doc: " << old_meta_path << endl;
@@ -177,13 +185,13 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     { cerr << "Filepath error: " << filedir << endl; return this_thread->stoprun(); }
 
     try { //Основная операция по отправке новых файлов
-        ioctl = sendheader(sockfd, actual_version, buffer);
+        bytes_readed = sendheader(sockfd, actual_version, buffer);
         send_delta(sockfd, update, filedir, buffer); //Основная операция отправки данных
     }
     catch ( std::runtime_error & ex)
     {
         cerr << "Got runtime_error while sending update: " << ex.what() << endl;
-        ioctl = sendheader(sockfd, "SERVERERROR", buffer);
+        bytes_readed = sendheader(sockfd, "SERVERERROR", buffer);
         return this_thread->stoprun();
     }
 
@@ -191,6 +199,6 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
     cout << "delta_metad_worker ends routine" << endl;
     #endif // DEBUG_BUILD
 
-    ioctl = sendheader(sockfd, "COMPLETE", buffer); //Отправляем напоследок последнюю версию
+    bytes_readed = sendheader(sockfd, "COMPLETE", buffer); //Отправляем напоследок последнюю версию
     return this_thread->stoprun();
 }

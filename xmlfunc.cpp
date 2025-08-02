@@ -1,10 +1,12 @@
 #include <iostream>
 #include <string>
-#include <tinyxml2.h>
 #include <filesystem>
+#include <stdexcept>
+#include <tinyxml2.h>
 #include <sys/stat.h>
-#include <exception>
+
 #include "tstring.h"
+#include "mainfunc.h"
 
 using namespace tinyxml2;
 using Direntry = std::filesystem::directory_entry;
@@ -99,12 +101,14 @@ void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
         exit(1);
     }
 
+
     time_t modtime = statbuf->st_mtime;
     off_t file_size = statbuf->st_size;  // Получаем размер файла в байтах
     delete statbuf;
 
     // Заполняем строки атрибутов
-    string path = relative(newdirentry.path(), target);
+    string fullfilepath = newdirentry.path();
+    string path = relative(fullfilepath, target);
     string weight;
     std::stringstream ss;
     tstring modify(modtime);
@@ -113,6 +117,13 @@ void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
     xmlel->SetAttribute("path", path.c_str());
     xmlel->SetAttribute("modify", modify.c_str());
     xmlel->SetAttribute("weight", std::to_string(file_size).c_str());  // Добавляем вес файла
+
+    //Добавляем хэш, если это файл
+    if (newdirentry.is_regular_file())
+    {
+        std::string hash_string = computeFileSHA256(fullfilepath);
+        xmlel->SetAttribute("sha256", hash_string.c_str());
+    }
 }
 
 //Сравнение элементов по пути (в идеале по относительному)
@@ -127,13 +138,19 @@ bool cmp_XML_path(XMLElement* first, XMLElement* second)
     return false;
 }
 
-//Сравнение элементов по дате изменений
+//Сравнение элементов (файлов)
 bool cmp_XML_modify(XMLElement* oldv, XMLElement* actual)
 {
+    if (!oldv || !actual)
+        throw std::invalid_argument("Null pointer passed to cmp_XML_modify.");
+
     const char* oldm = oldv->Attribute("modify");
     const char* actm = actual->Attribute("modify");
-    if(oldm && actm)
-        return string(oldm) == string(actm);
-    else
-        return false;
+    const char* oldhash = oldv->Attribute("sha256");
+    const char* acthash = actual->Attribute("sha256");
+
+    if (!oldm || !actm || !oldhash || !acthash)
+        throw std::invalid_argument("Missing required XML attributes for comparison.");
+
+    return (string(oldm) == string(actm)) || (string(oldhash) == string(acthash));
 }

@@ -1,12 +1,12 @@
 #ifndef THREADDATACONTAINER_H_INCLUDED
 #define THREADDATACONTAINER_H_INCLUDED
 
-#include <mutex>
-#include <pthread.h>
-#include <filesystem>
-#include <errno.h>
 #include <exception>
+#include <stdexcept>
 #include <iostream>
+#include <unistd.h>
+#include <pthread.h>
+#include <sys/socket.h>
 
 class ThreadDataContainer
 {
