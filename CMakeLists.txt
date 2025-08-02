@@ -3,22 +3,30 @@ cmake_minimum_required(VERSION 3.10)
 project(metad)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/deploy" CACHE PATH "Install path" FORCE)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/deploy/debug" CACHE PATH "Install path" FORCE)
+endif ()
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/deploy/release" CACHE PATH "Install path" FORCE)
+endif ()
 
 find_package(OpenSSL REQUIRED)
 
 add_executable(metad
     main.cpp
+
     workers/deltametaworker.cpp
     workers/fullmetaworker.cpp
-    mainfunc.cpp
-    xmlfunc.cpp
-    meta.cpp
+    net/netfunc.h
+    net/netfunc.cpp
+    exeptions/unaccaptable.h
+
+    mainfunc.h mainfunc.cpp
+    xmlfunc.h xmlfunc.cpp
+    meta.h meta.cpp
     threaddatacontainer.h
     tstring.h
-        net/netfunc.h
-        net/netfunc.cpp
-        exeptions/unaccaptable.h
 )
 
 # Подключаем заголовки tinyxml2
@@ -35,6 +43,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif ()
 
 install(TARGETS metad
-    DESTINATION ".")
+    DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 

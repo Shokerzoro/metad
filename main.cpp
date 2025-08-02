@@ -88,7 +88,7 @@ int main(int argc, char** argv)
             std::string portstr = argv[6];
             int port = -1;
             try { port = std::stoi(portstr); }
-            catch(exception & ex)
+            catch(std::exception & ex)
             { std::cout << "Port arg error" << ex.what() << std::endl; exit(1); }
             if((port <= 0) || (port > UINT16_MAX))
             { std::cout << "Wrong port num: " << port << std::endl; exit(1); }
