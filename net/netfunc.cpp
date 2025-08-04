@@ -70,22 +70,16 @@ size_t recvheader(const int sockfd, std::string & header, std::vector<char> & bu
     size_t bytes_readed = readsocket(sockfd, buffer, 2, 0);
     memcpy(&header_size, buffer.data(), sizeof(header_size));
     header_size = ntohs(header_size);
-    if(header_size < BUFFSIZE - 6)
+    if(header_size > BUFFSIZE - 6)
         throw std::runtime_error("Wrong header came");
 
     bytes_readed += readsocket(sockfd, buffer, (size_t)header_size, 0);
     header = std::string(buffer.data(), header_size);
-#ifdef DEBUG_BUILD
-    std::cout << "Deltametad got header: " << header << std::endl;
-#endif
     return bytes_readed;
 }
 
 size_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer)
 {
-#ifdef DEBUG_BUILD
-    std::cout << "Deltametad sending header: " << header << std::endl;
-#endif
     ascii_string ascii_header(header);
     uint16_t header_size = fill_buff(ascii_header, buffer);
     return writesocket(sockfd, buffer, (size_t)header_size, 0);;

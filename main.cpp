@@ -28,7 +28,7 @@ using ThreadList = std::list<ThreadDataContainer*>;
 Path target;
 Path meta;
 
-#ifdef DEBUG_BUILD
+#ifdef ASAN_ON
 extern "C" void __lsan_do_leak_check();
 #endif
 extern void full_metad_worker(Path & snap_dir, int alrmtime);
@@ -82,7 +82,7 @@ int main(int argc, char** argv)
 		} //Демон full-meta
         if(calltype == "delta") //Демон delta-meta
         {
-            #ifndef DEBUG_BUILD
+            #ifndef LOCAL_SOCKET
             //Получаем айпи адрес и порт для сокета
             std::string ipv4(argv[5]);
             std::string portstr = argv[6];
@@ -92,11 +92,11 @@ int main(int argc, char** argv)
             { std::cout << "Port arg error" << ex.what() << std::endl; exit(1); }
             if((port <= 0) || (port > UINT16_MAX))
             { std::cout << "Wrong port num: " << port << std::endl; exit(1); }
-            #endif // DEBUG_BUILD
-            #ifdef DEBUG_BUILD
+            #endif // LOCAL_SOCKET
+            #ifdef LOCAL_SOCKET
             std::string ipv4("127.0.0.1");
             int port = 6666;
-            #endif // DEBUG_BUILD
+            #endif // LOCAL_SOCKET
 
             int serversock, workersock;
             if((serversock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
@@ -126,11 +126,11 @@ int main(int argc, char** argv)
 
             std::cout << "Delta metadata configured." << std::endl;
             std::cout << "Started at:" << get_current_time() << std::endl;
-            std::cout << "Listening: " << ipv4 << ":" << port << std::endl;
+            std::cout << "Main thread: listening: " << ipv4 << ":" << port << std::endl;
 
             while(true) //Бесконечный цикл обслуживания клиентов
             {
-                #ifdef DEBUG_BUILD
+                #ifdef ASAN_ON
                 __lsan_do_leak_check();
                 #endif
 
@@ -138,7 +138,7 @@ int main(int argc, char** argv)
                 if(workersock < 0) { continue; } //Вдруг было прервано сигналом
 
                 #ifdef DEBUG_BUILD
-                std::cout << "Got acception" << std::endl;
+                std::cout << "Main thread: got acception" << std::endl;
                 #endif // DEBUG_BUILD
 
                 ThreadDataContainer* nthreadd;
@@ -168,7 +168,7 @@ int main(int argc, char** argv)
                 }
 
                 #ifdef DEBUG_BUILD
-                std::cout << "Thread created, thread_id: " << nthreadt << std::endl;
+                std::cout << "MainThread: new created thread id: " << nthreadt << std::endl;
                 #endif //DEBUG_BUILD
 
                 for (auto iter = threads.begin(); iter != threads.end();) //Чистим систему от данных
@@ -177,6 +177,7 @@ int main(int argc, char** argv)
                     pthread_t thrdid = thrd->checkrun();
                     if(thrdid != (pthread_t)-1)
                     { //Присоединяем поток, освобождаем ThreadDataContainer и чистим структуру данных
+                        std::cout << "Main thread: deleting container with thread_id: " << thrdid << std::endl;
                         auto deliter = iter; iter++;
                         pthread_join(thrdid, nullptr);
                         threads.erase(deliter);

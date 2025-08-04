@@ -15,6 +15,7 @@ struct TagStrings {
     static constexpr const char* SOMEUPDATE = "SOMEUPDATE";
     static constexpr const char* GETUPDATE = "GETUPDATE";
     static constexpr const char* VERSION = "VERSION";
+    static constexpr const char* HASH = "HASH";
 
     static constexpr const char* NEWDIR = "NEWDIR";
     static constexpr const char* NEWFILE = "NEWFILE";

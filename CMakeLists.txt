@@ -10,6 +10,9 @@ endif ()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/deploy/release" CACHE PATH "Install path" FORCE)
 endif ()
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/deploy/RelWithDebInfo" CACHE PATH "Install path" FORCE)
+endif ()
 
 find_package(OpenSSL REQUIRED)
 
@@ -38,8 +41,14 @@ target_compile_definitions(metad PRIVATE BUFFSIZE=255)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(metad PRIVATE DEBUG_BUILD)
+    target_compile_definitions(metad PRIVATE LOCAL_SOCKET)
+    target_compile_definitions(metad PRIVATE ASAN_ON)
     target_compile_options(metad PRIVATE -fsanitize=address -fno-omit-frame-pointer -g -O1)
     target_link_options(metad PRIVATE -fsanitize=address)
+endif ()
+
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_compile_definitions(metad PRIVATE DEBUG_BUILD)
 endif ()
 
 install(TARGETS metad

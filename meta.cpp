@@ -257,7 +257,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
     //Цикл отправки файлов
     for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile"))
     {
-        string weightstr;
+        std::string weightstr, file_hash;
         int fd; //Дескриптор файла для sendfile
 
         try {
@@ -268,18 +268,36 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
 
             char* endptr = nullptr;
             weightstr = xmliter->Attribute("weight");
+            file_hash = xmliter->Attribute("sha256");
             uint32_t weight = std::strtoll(weightstr.c_str(), &endptr, 10);
             if(weight == 0)
-                throw std::invalid_argument("Symlink maybe. How can it get there?");
+                throw std::invalid_argument("File weight == 0. Symlink maybe. How can it get there?");
+            if (file_hash.empty())
+                throw std::invalid_argument("No file hash. Check deltameta generator logic.");
 
             if((fd = open(fullname.c_str(), O_RDONLY)) == -1)
                 throw std::runtime_error("Ошибка открытия файла: " + fullname);
 
-            //Отправим заголовок и ждем подтверждения
+            //Отправляем заголовок с путем
             header = build_header(TagStrings::NEWFILE, relpath.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
+#ifdef DEBUG_BUILD
+            pthread_t threadid = pthread_self();
+            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+#endif
+
+            //Отправим заголовок с хэшем
+            header = build_header(TagStrings::HASH, file_hash.c_str());
+            bytes_readed = sendheader(sockfd, header, buffer);
+#ifdef DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+#endif
+
             bytes_readed = recvheader(sockfd, header, buffer);
             parse_header(header, tag, value);
+#ifdef DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << "got header: " << header << std::endl;
+#endif
 
             if (tag == TagStrings::NEWFILE && value == TagStrings::AGREE) //Отправляем файл
             {

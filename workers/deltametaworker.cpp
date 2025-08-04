@@ -25,180 +25,287 @@ using Path = std::filesystem::path;
 extern Path target;
 extern Path meta;
 
+enum class State { NONE, PROPER, NOUPDATE, APPROVED, AGREED };
+
+// Объявления хэндлеров
+static bool handle_none_state(int sockfd, const string& tag, const string& value, State& state, vector<char>& buffer);
+static bool handle_proper_state(int sockfd, const string& tag, const string& value, State& state,
+                                vector<char>& buffer, Path& old_meta_path, string& old_version,
+                                Path& actual_meta_path, string& actual_version);
+static bool handle_noupdate_state(int sockfd, const string& tag, const string& value, ThreadDataContainer* thread_data);
+static bool handle_approved_state(int sockfd, const string& tag, const string& value, State& state,
+                                  const string& actual_version, vector<char>& buffer, ThreadDataContainer* thread_data);
+static bool handle_agreed_state(int sockfd, const Path& old_meta_path, const Path& actual_meta_path,
+                                const string& old_version, const string& actual_version,
+                                vector<char>& buffer, ThreadDataContainer* thread_data);
+static void create_delta_file(const Path& old_meta_path, const Path& actual_meta_path,
+                              const string& actual_version, const string& old_version, Path& deltameta);
+static bool send_delta_file(int sockfd, const Path& deltameta, vector<char>& buffer,
+                            const string& actual_version, ThreadDataContainer* thread_data);
+
 void* delta_metad_worker(void* data) //Здесь непосредственно идет обслуживание клиентов
 {
-    //Получаем указатель на управляющую структуру
     ThreadDataContainer* this_thread = reinterpret_cast<ThreadDataContainer*>(data);
     int sockfd;
 
-    //Получаем дескриптор сокета блокируя общую структуру данных и блокируем сигналы
     try {
         sockfd = this_thread->startrun(); //Захватываем мьютекс общего элемента
         mute_signals(); //Блокировка всех сигналов
     }
-    catch(exception & ex) {
+    catch(exception& ex) {
         cerr << ex.what();
         return this_thread->stoprun();
     }
 
     string header, tag, value;
-    vector<char> buffer(BUFFSIZE); //Отдельный буфер на каждый поток
+    vector<char> buffer(BUFFSIZE);
     Path old_meta_path, actual_meta_path;
     string old_version, actual_version;
-    enum class State { NONE, PROPER, APPROVED, AGREED };
     State state = State::NONE;
     int err_counter = 0;
-    size_t bytes_readed = 0; //Для возможности более тонкого контроля
+    size_t bytes_readed = 0;
 
     #ifdef DEBUG_BUILD
-    cout << "delta_metad_worker starts routine" << endl;
-    #endif // DEBUG_BUILD
+    pthread_t threadid = pthread_self();
+    cout << "DeltaWorker " << threadid << " starts routine" << endl;
+    #endif
 
-    while (true) //Цикл чтения запросов
-    { try {
-        //Получаем версию
-        bytes_readed = recvheader(sockfd, header, buffer);
-        if(bytes_readed < 0)
-            throw std::runtime_error("Connection lost");
-        parse_header(header, tag, value);
+    while (true)
+    {
+        try {
+            bytes_readed = recvheader(sockfd, header, buffer);
+            if (bytes_readed < 0)
+                throw std::runtime_error("Connection lost");
+            parse_header(header, tag, value);
 
-        if(state == State::NONE && tag == TagStrings::PROTOCOL) //Первый запрос, идентификация протокола
-        {
-            //Uniter Network for Manufacturing Execution Systems
-            if( value == TagStrings::UNETMES)
+            #ifdef DEBUG_BUILD
+            cout << "DeltaWorker " << threadid << "got header: " << header << endl;
+            #endif
+
+            bool continue_loop = true;
+            switch(state)
             {
-                state = State::PROPER;
-                header = build_header(TagStrings::PROTOCOL, TagStrings::UNETMES);
-                sendheader(sockfd, header, buffer);
+                case State::NONE:
+                    continue_loop = handle_none_state(sockfd, tag, value, state, buffer);
+                    break;
+                case State::PROPER:
+                    continue_loop = handle_proper_state(sockfd, tag, value, state, buffer,
+                                                        old_meta_path, old_version, actual_meta_path, actual_version);
+                    break;
+                case State::NOUPDATE:
+                    continue_loop = handle_noupdate_state(sockfd, tag, value, this_thread);
+                    break;
+                case State::APPROVED:
+                    continue_loop = handle_approved_state(sockfd, tag, value, state, actual_version, buffer, this_thread);
+                    break;
+                case State::AGREED:
+                    continue_loop = false;
+                    break;
             }
-            else
-                return this_thread->stoprun();
-        } //Первый запрос, идентификация протокола
-        if(state == State::PROPER && tag == TagStrings::VERSION) //Получаем версию
-        {
-            old_meta_path = target / ("full-meta-" + value + ".XML");
-            
-            if(std::filesystem::exists(old_meta_path)) //Если существует
-            {
-                state = State::APPROVED;
-                old_version = old_meta_path.string();
-                get_actual(target, actual_meta_path, actual_version);
 
-                if(old_meta_path == actual_meta_path) //обновлений нет
-                {
-                    header = build_header(TagStrings::PROTOCOL, TagStrings::NOUPDATE);
-                    bytes_readed = sendheader(sockfd, header, buffer);
-                    return this_thread->stoprun();
-                }
-                else
-                {
-                    header = build_header(TagStrings::PROTOCOL, TagStrings::SOMEUPDATE);
-                    bytes_readed = sendheader(sockfd, header, buffer);
-                }
-            }
-            else
-                throw Unacceptable("Wrong version request");
-        } //Получаем версию
-        if(state == State::APPROVED && tag == TagStrings::PROTOCOL) //Получаем подтверждение обновлений
-        {
-            if(value == "AGREE") //Получаем согласие
-            {
-                state = State::AGREED;
-                header = build_header(TagStrings::VERSION, actual_version.c_str());
-                bytes_readed = sendheader(sockfd, header, buffer);
+            if (!continue_loop)
                 break;
-            }
-            if(header == "REJECT") //Получаем отказ
-            {
-                #ifdef DEBUG_BUILD
-                std::cout << "Client rejected getting update" << std::endl;
-                #endif
-                return this_thread->stoprun();
-            } //Получаем подтверждение обновлений
-        } //Цикл чтения запросов
-    } //Try
-    catch (Unacceptable & ex)
-    {
-        std::cerr << "Got unaccaptable exeption" << std::endl;
-        std::cerr << ex.what() << std::endl;
-        return this_thread->stoprun();
-    }
-    catch(std::runtime_error & ex)
-    {
-        cerr << "Runtime error: " << ex.what() << endl;
-        return this_thread->stoprun();
-    }
-    catch(std::invalid_argument & ex)
-    {
-        if(err_counter++ >= 3)
+        }
+        catch (Unacceptable& ex)
         {
-            std::cerr << "Client error: protocol exeptions limitated" << std::endl;
+            std::cerr << "Got unaccaptable exeption" << std::endl;
+            std::cerr << ex.what() << std::endl;
             return this_thread->stoprun();
         }
-        continue;
-    } } //Обработка исключений цикла чтения запросов
+        catch (std::runtime_error& ex)
+        {
+            cerr << "Runtime error: " << ex.what() << endl;
+            return this_thread->stoprun();
+        }
+        catch (std::invalid_argument& ex)
+        {
+            if (err_counter++ >= 3)
+            {
+                std::cerr << "Client error: protocol exeptions limitated" << std::endl;
+                return this_thread->stoprun();
+            }
+            continue;
+        }
+    }
 
-    #ifdef DEBUG_BUILD
-    cout << "Old full-meta XML doc: " << old_meta_path << endl;
-    cout << "Actual full-meta XML doc: " << actual_meta_path << endl;
-    #endif // debug
-
-    //Формируем название deltameta файла
-    string docname = "delta-meta-" + old_version + "-" + actual_version + ".XML";
-    Path deltameta(meta.string() + docname); //Путь к файлу дельты
-
-    if(!std::filesystem::exists(deltameta)) //Если нет готовой, создаем новый документ
+    if (state == State::AGREED)
     {
-        //Создание XML документа и корневого элемента
-        XMLDocument new_XML_doc;
-        XMLElement* update = new_XML_doc.NewElement("update");
-        new_XML_doc.InsertFirstChild(update);
+        bool result = handle_agreed_state(sockfd, old_meta_path, actual_meta_path,
+                                          old_version, actual_version, buffer, this_thread);
+        if (!result) return this_thread->stoprun();
+    }
 
-        XMLDocument old_XML_doc;
-        XMLDocument actual_XML_doc;
-        open_XML_doc(old_XML_doc, old_meta_path.string().c_str());
-        open_XML_doc(actual_XML_doc, actual_meta_path.string().c_str());
+    return this_thread->stoprun();
+}
 
-        //Открываем root элементы и добавляем аттрибут filedir
-        XMLElement* oldupdate = old_XML_doc.RootElement();
-        XMLElement* actualupdate = actual_XML_doc.RootElement();
-        //Для того, чтобы знать, где находятся файлы. Пути в fullXML относительные, но есть ссылка на каталог
-        string actualfiledir = actualupdate->Attribute("filedir");
-        update->SetAttribute("version", actual_version.c_str());
-        update->SetAttribute("filedir", actualfiledir.c_str());
-        //Вызываем рекурсию
-        delta_dmeta(oldupdate, actualupdate, update);
+// ---------- Хэндлеры ----------
 
-        //Сохранение
-        new_XML_doc.SaveFile(deltameta.string().c_str());
+static bool handle_none_state(int sockfd, const string& tag, const string& value, State& state, vector<char>& buffer)
+{
+    if (tag == TagStrings::PROTOCOL && value == TagStrings::UNETMES)
+    {
+        state = State::PROPER;
+        string header = build_header(TagStrings::PROTOCOL, TagStrings::UNETMES);
+        #ifdef DEBUG_BUILD
+        pthread_t threadid = pthread_self();
+        std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+        #endif
+        sendheader(sockfd, header, buffer);
+        return true;
+    }
+    return false;
+}
 
-    } //Создаем новый delta
+static bool handle_proper_state(int sockfd, const string& tag, const string& value, State& state,
+                                vector<char>& buffer, Path& old_meta_path, string& old_version,
+                                Path& actual_meta_path, string& actual_version)
+{
+    if (tag != TagStrings::VERSION) return true;
 
-    //Теперь открываем XML файл, парсим его и отправляем данные!!!!
+    old_meta_path = target / ("full-meta-" + value + ".XML");
+
+    if (std::filesystem::exists(old_meta_path))
+    {
+        state = State::APPROVED;
+        old_version = value;
+        get_actual(target, actual_meta_path, actual_version);
+
+        if (old_meta_path == actual_meta_path)
+        {
+            state = State::NOUPDATE;
+            string header = build_header(TagStrings::PROTOCOL, TagStrings::NOUPDATE);
+            #ifdef DEBUG_BUILD
+            pthread_t threadid = pthread_self();
+            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+            #endif
+            sendheader(sockfd, header, buffer);
+            return false;
+        }
+        else
+        {
+            string header = build_header(TagStrings::PROTOCOL, TagStrings::SOMEUPDATE);
+            #ifdef DEBUG_BUILD
+            pthread_t threadid = pthread_self();
+            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+            #endif
+            sendheader(sockfd, header, buffer);
+            return true;
+        }
+    }
+    else
+    {
+        throw Unacceptable("Wrong version request");
+    }
+}
+
+static bool handle_noupdate_state(int sockfd, const string& tag, const string& value, ThreadDataContainer* thread_data)
+{
+    if (tag == TagStrings::PROTOCOL && value == TagStrings::COMPLETE)
+        return false;
+    return true;
+}
+
+static bool handle_approved_state(int sockfd, const string& tag, const string& value, State& state,
+                                  const string& actual_version, vector<char>& buffer, ThreadDataContainer* thread_data)
+{
+    if (tag == TagStrings::PROTOCOL)
+    {
+        if (value == "AGREE")
+        {
+            state = State::AGREED;
+            string header = build_header(TagStrings::VERSION, actual_version.c_str());
+            #ifdef DEBUG_BUILD
+            pthread_t threadid = pthread_self();
+            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
+            #endif
+            sendheader(sockfd, header, buffer);
+            return false;
+        }
+        if (value == "REJECT")
+        {
+            #ifdef DEBUG_BUILD
+            pthread_t threadid = pthread_self();
+            std::cout << "DeltaWorker " << threadid << " : client rejected getting update" << std::endl;
+            #endif
+            thread_data->stoprun();
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool handle_agreed_state(int sockfd, const Path& old_meta_path, const Path& actual_meta_path,
+                                const string& old_version, const string& actual_version,
+                                vector<char>& buffer, ThreadDataContainer* thread_data)
+{
+    #ifdef DEBUG_BUILD
+    pthread_t threadid = pthread_self();
+    std::cout << "DeltaWorker " << threadid << " : old full-meta XML doc: " << old_meta_path << std::endl;
+    std::cout << "DeltaWorker " << threadid << " : actual full-meta XML doc: " << actual_meta_path << std::endl;
+    #endif
+
+    string docname = "delta-meta-" + old_version + "-" + actual_version + ".XML";
+    Path deltameta = meta / docname;
+
+    if (!std::filesystem::exists(deltameta))
+        create_delta_file(old_meta_path, actual_meta_path, actual_version, old_version, deltameta);
+
+    return send_delta_file(sockfd, deltameta, buffer, actual_version, thread_data);
+}
+
+static void create_delta_file(const Path& old_meta_path, const Path& actual_meta_path,
+                              const string& actual_version, const string& old_version, Path& deltameta)
+{
+    XMLDocument new_XML_doc;
+    XMLElement* update = new_XML_doc.NewElement("update");
+    new_XML_doc.InsertFirstChild(update);
+
+    XMLDocument old_XML_doc, actual_XML_doc;
+    open_XML_doc(old_XML_doc, old_meta_path.string().c_str());
+    open_XML_doc(actual_XML_doc, actual_meta_path.string().c_str());
+
+    XMLElement* oldupdate = old_XML_doc.RootElement();
+    XMLElement* actualupdate = actual_XML_doc.RootElement();
+
+    string actualfiledir = actualupdate->Attribute("filedir");
+    update->SetAttribute("version", actual_version.c_str());
+    update->SetAttribute("filedir", actualfiledir.c_str());
+
+    delta_dmeta(oldupdate, actualupdate, update);
+
+    new_XML_doc.SaveFile(deltameta.string().c_str());
+}
+
+static bool send_delta_file(int sockfd, const Path& deltameta, vector<char>& buffer,
+                            const string& actual_version, ThreadDataContainer* thread_data)
+{
     XMLDocument delta_XML_doc;
     open_XML_doc(delta_XML_doc, deltameta.string().c_str());
 
-    //Получаем корневой элемент и каталог хранения файлов
     XMLElement* update = delta_XML_doc.RootElement();
     string filedir = update->Attribute("filedir");
-    if(!std::filesystem::exists(filedir))
-    { cerr << "Filepath error: " << filedir << endl; return this_thread->stoprun(); }
-
-    try { //Основная операция по отправке новых файлов
-        bytes_readed = sendheader(sockfd, actual_version, buffer);
-        send_delta(sockfd, update, filedir, buffer); //Основная операция отправки данных
+    if (!std::filesystem::exists(filedir))
+    {
+        cerr << "Filepath error: " << filedir << endl;
+        return false;
     }
-    catch ( std::runtime_error & ex)
+
+    try {
+        sendheader(sockfd, actual_version, buffer);
+        send_delta(sockfd, update, filedir, buffer);
+    }
+    catch (std::runtime_error& ex)
     {
         cerr << "Got runtime_error while sending update: " << ex.what() << endl;
-        bytes_readed = sendheader(sockfd, "SERVERERROR", buffer);
-        return this_thread->stoprun();
+        sendheader(sockfd, "SERVERERROR", buffer);
+        return false;
     }
 
     #ifdef DEBUG_BUILD
-    cout << "delta_metad_worker ends routine" << endl;
-    #endif // DEBUG_BUILD
+    pthread_t threadid = pthread_self();
+    std::cout << "DeltaWorker " << threadid << " : delta_metad_worker ends routine" << endl;
+    #endif
 
-    bytes_readed = sendheader(sockfd, "COMPLETE", buffer); //Отправляем напоследок последнюю версию
-    return this_thread->stoprun();
+    sendheader(sockfd, "COMPLETE", buffer);
+    return true;
 }
