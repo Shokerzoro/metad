@@ -33,11 +33,10 @@ static void generate_fullxml(std::string & bldtime_str, std::string & proj_name,
 static void update_inotify(void); //Апдейтим инотифай
 
 static int upflag; // Флаг входа обработчика SIGALRM
+static bool ignore_meta_delete = false;
+static bool ignore_meta_modify = false; // Для подавления IN_MODIFY на meta.XML, когда он приходит до того как exists возвращает false
 extern Path target;
 extern Path meta;
-// ... другие include'ы
-static bool ignore_meta_delete = false;
-static bool ignore_meta_modify = false; // Для подавления IN_MODIFY на meta.XML при ручном удалении
 
 void full_metad_worker(Path & snap_dir, int alrmtime)
 {
