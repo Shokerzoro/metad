@@ -84,10 +84,29 @@ void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string 
     cout << "Project " << proj_name << " build at " << bldtime_str << endl;
     cout << "by " << author_str << " has " << vers_str << "version " << endl;
 
-    #ifndef DEBUG_BUILD
+    #ifdef DELETE_META
     if(!std::filesystem::remove(metafile))
         throw std::runtime_error("Unknown error");
     #endif
+}
+
+//Полчить версию из xml файла
+extern void get_version(Path & metaxml_path, std::string & version)
+{
+    XMLDocument metaxml;
+    XMLError result = metaxml.LoadFile(metaxml_path.string().c_str());
+    if (result != tinyxml2::XML_SUCCESS)
+        throw std::runtime_error("Unable to load metaxml");
+
+    XMLElement* update = metaxml.RootElement();
+    if (!update)
+        throw std::runtime_error("No root element");
+
+    const char* version_c = update->Attribute("version");
+    if (!version_c)
+        throw std::runtime_error("No version attribute found");
+
+    version = version_c;
 }
 
 void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
@@ -101,7 +120,6 @@ void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
         exit(1);
     }
 
-
     time_t modtime = statbuf->st_mtime;
     off_t file_size = statbuf->st_size;  // Получаем размер файла в байтах
     delete statbuf;
@@ -109,20 +127,30 @@ void set_XML_attr(XMLElement* xmlel, Direntry& newdirentry, Path& target)
     // Заполняем строки атрибутов
     string fullfilepath = newdirentry.path();
     string path = relative(fullfilepath, target);
-    string weight;
+    string weight = std::to_string(file_size);
     std::stringstream ss;
     tstring modify(modtime);
 
     // Формируем атрибуты
     xmlel->SetAttribute("path", path.c_str());
     xmlel->SetAttribute("modify", modify.c_str());
-    xmlel->SetAttribute("weight", std::to_string(file_size).c_str());  // Добавляем вес файла
+    xmlel->SetAttribute("weight", weight.c_str());  // Добавляем вес файла
+
+    #ifdef DEBUG_BUILD
+    std::cout << "New element set attributes: " << std::endl;
+    std::cout << "Path: " << path << std::endl;
+    std::cout << "Modified: " << modify << std::endl;
+    std::cout << "Weight: " << weight << std::endl;
+    #endif
 
     //Добавляем хэш, если это файл
     if (newdirentry.is_regular_file())
     {
         std::string hash_string = computeFileSHA256(fullfilepath);
         xmlel->SetAttribute("sha256", hash_string.c_str());
+        #ifdef DEBUG_BUILD
+        std::cout << "Hash: " << hash_string << std::endl;
+        #endif
     }
 }
 

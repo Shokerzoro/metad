@@ -24,7 +24,7 @@ extern void inotify_loop(int infd, Path & target, IMap & mapper);
 extern void inoupdate(int infd, IMap & mapper);
 
 //Работа с файлами и строками
-extern void get_actual(const Path & dir_path, Path & actual_meta_path, std::string & actualdate); //Получение актуального файла
+extern void get_actual(const Path & dir_path, Path & actual_meta_path); //Получение актуального файла
 extern std::string computeFileSHA256(const std::string& filePath); //Получение хэша sha256 по файлу
 extern std::string get_current_time(void) noexcept;
 

@@ -247,12 +247,14 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
 }
 
 //Отправка данных, при парсинге файла delta-meta
-void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vector<char> & buffer)
+void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<char> & buffer)
 {
     XMLElement* xmliter = nullptr;
     uint16_t header_size;
     size_t bytes_readed;
-    std::string header, tag, value, relpath, fullname;
+    std::string header, tag, value;
+    Path filedir, relpath, fullname;
+    filedir = Path(dir);
 
     //Цикл отправки файлов
     for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile"))
@@ -262,9 +264,9 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
 
         try {
             relpath = xmliter->Attribute("path");
-            fullname = filedir + relpath;
+            fullname = filedir / relpath;
             if (!std::filesystem::exists(fullname))
-                throw std::runtime_error("Файл не найден: " + fullname);
+                throw std::runtime_error("Файл не найден: " + fullname.string());
 
             char* endptr = nullptr;
             weightstr = xmliter->Attribute("weight");
@@ -275,8 +277,8 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
             if (file_hash.empty())
                 throw std::invalid_argument("No file hash. Check deltameta generator logic.");
 
-            if((fd = open(fullname.c_str(), O_RDONLY)) == -1)
-                throw std::runtime_error("Ошибка открытия файла: " + fullname);
+            if((fd = open(fullname.string().c_str(), O_RDONLY)) == -1)
+                throw std::runtime_error("Ошибка открытия файла: " + fullname.string());
 
             //Отправляем заголовок с путем
             header = build_header(TagStrings::NEWFILE, relpath.c_str());
@@ -305,12 +307,12 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & filedir, std::vect
                 if(bytes_readed != weight)
                 {
                     close(fd);
-                    throw std::runtime_error("Error while sending file" + fullname);
+                    throw std::runtime_error("Error while sending file" + fullname.string());
                 }
 
                 //И не забываем закрыть файл если все прошло успешно
                 if(close(fd) == -1)
-                    throw std::runtime_error("File closing error: " + fullname);
+                    throw std::runtime_error("File closing error: " + fullname.string());
 
                 #ifdef DEBUG_BUILD
                 std::cout << "Newfile sent: " << relpath << std::endl;
@@ -413,8 +415,10 @@ void add_news(XMLElement* update, XMLElement* actual)
         XMLElement* newf = update->InsertNewChildElement("newfile");
         const char* newpath = actualfileiter->Attribute("path");
         const char* weigth = actualfileiter->Attribute("weight");
+        const char* hash = actualfileiter->Attribute("sha256");
         newf->SetAttribute("path", newpath);
         newf->SetAttribute("weight", weigth);
+        newf->SetAttribute("sha256", hash);
 
         actualfileiter = actualfileiter->NextSiblingElement("file");
     }

@@ -168,7 +168,8 @@ static bool handle_proper_state(int sockfd, const string& tag, const string& val
     {
         state = State::APPROVED;
         old_version = value;
-        get_actual(target, actual_meta_path, actual_version);
+        get_actual(target, actual_meta_path);
+        get_version(actual_meta_path, actual_version);
 
         if (old_meta_path == actual_meta_path)
         {

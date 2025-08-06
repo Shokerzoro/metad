@@ -194,7 +194,7 @@ int clear_mapper(IMap & mapper)
 }
 
 // - - - - - - - - - - - - - - Работа с файлами и строками - - - - - - - - - - - - - -
-void get_actual(const Path & meta_dir, Path & actual_meta_path, string & actualdate)
+void get_actual(const Path & meta_dir, Path & actual_meta_path)
 {
     #ifdef DEBUG_BUILD
     cout << "Searching actual XML doc" << endl;
@@ -228,7 +228,6 @@ void get_actual(const Path & meta_dir, Path & actual_meta_path, string & actuald
         }
     }
     actual_meta_path = latest_file;
-    actualdate = tstring(latest_btime);
 } //Get actual
 
 //Парсим хэдер на тэг и ценность

@@ -45,10 +45,16 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(metad PRIVATE ASAN_ON)
     target_compile_options(metad PRIVATE -fsanitize=address -fno-omit-frame-pointer -g -O1)
     target_link_options(metad PRIVATE -fsanitize=address)
-endif ()
-
-if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     target_compile_definitions(metad PRIVATE DEBUG_BUILD)
+    target_compile_definitions(metad PRIVATE DELETE_META)
+else()
+    target_compile_definitions(metad PRIVATE RELEASE_BUILD)
+    target_compile_definitions(metad PRIVATE DELETE_META)
+endif()
+if()
+
+
 endif ()
 
 install(TARGETS metad
