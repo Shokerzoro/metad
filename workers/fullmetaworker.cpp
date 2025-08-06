@@ -35,6 +35,9 @@ static void update_inotify(void); //Апдейтим инотифай
 static int upflag; // Флаг входа обработчика SIGALRM
 extern Path target;
 extern Path meta;
+// ... другие include'ы
+static bool ignore_meta_delete = false;
+static bool ignore_meta_modify = false; // Для подавления IN_MODIFY на meta.XML при ручном удалении
 
 void full_metad_worker(Path & snap_dir, int alrmtime)
 {
@@ -78,8 +81,6 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
             #endif
             upflag = 0;
 
-            //Тут установка на блокирование всех отслеживаемых файлов
-
             try {
                 //Получаем метаданные о новой версии
                 get_meta(metafile, build_time, project_name, version, author);
@@ -94,6 +95,12 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 const auto CopyOptions = std::filesystem::copy_options::skip_symlinks | std::filesystem::copy_options::recursive;
                 std::filesystem::copy(target, new_snap, CopyOptions);
                 std::cout << "version " <<  version << " duplicated to " <<  snap_dir <<  std::endl;
+
+                // Удаляем meta.XML и устанавливаем флаги игнорирования
+                ignore_meta_delete = true;
+                ignore_meta_modify = true;
+                std::filesystem::remove(metafile);
+
             }
             catch(std::exception & ex)
             {
@@ -124,16 +131,30 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
 
                 if (event->mask & IN_MODIFY)
                 {
-                    alarm(alrmtime);
-                    std::cout << "File modified: " << base << std::endl;
+                    if (ignore_meta_modify && base == metafile.string()) {
+                        std::cout << "IN_MODIFY ignored for meta.XML (manual delete in progress)" << std::endl;
+                    } else if (std::filesystem::exists(base)) {
+                        std::cout << "File modified: " << base << std::endl;
+                        alarm(alrmtime);
+                    } else {
+                        std::cout << "IN_MODIFY ignored for deleted file: " << base << std::endl;
+                    }
                 }
 
                 if (event->mask & IN_DELETE_SELF)
                 {
                     std::cout << "File or dir deleted (self): " << base << std::endl;
+
+                    if (ignore_meta_delete && base == metafile.string()) {
+                        std::cout << "meta.XML deletion ignored (manual)" << std::endl;
+                        ignore_meta_delete = false;
+                        ignore_meta_modify = false;
+                    } else {
+                        alarm(alrmtime);
+                    }
+
                     mapper.erase(fiter);
                     clear_mapper(mapper);
-                    alarm(alrmtime);
                 }
 
                 if (!(event->mask & IN_ISDIR))
@@ -164,6 +185,7 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
         }  //inotify updating
     } //Бесконечный цикл работы воркера
 }
+
 
 //Генерация и сохранение fullmetaxml
 static void generate_fullxml(std::string & bldtime_str, std::string & proj_name, std::string & version, std::string & author_str)

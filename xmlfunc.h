@@ -23,7 +23,7 @@ extern void set_XML_attr(XMLElement* xmlel, Direntry & dir, Path & target);
 //Сравнение элементов по пути (в идеале по относительному имени)
 extern bool cmp_XML_path(XMLElement* first, XMLElement* second);
 //Сравнение элементов по дате изменений
-extern bool cmp_XML_modify(XMLElement* oldv, XMLElement* actual); //true если нужно обновлять
+extern bool cmp_XML_modify(XMLElement* oldv, XMLElement* actual); //сравнивает по хэшу, если совпадают пути
 
 //Добавление атрибуту версионности
 //Пока не реализовываем

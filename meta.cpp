@@ -178,7 +178,7 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
             // Пути совпадают — рекурсивно сравниваем содержимое
             // Временно создаём подэлемент <directory>
             XMLElement* updatedir = update->InsertNewChildElement("directory");
-            updatedir->SetAttribute("path", oldpath);
+            updatedir->SetAttribute("path", oldpath); //Тут неважно oldpath или newpath
 
             // Рекурсивный вызов
             delta_dmeta(olddir, newdir, updatedir);
@@ -191,7 +191,7 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
 
             olddir = olddir->NextSiblingElement("directory");
             newdir = newdir->NextSiblingElement("directory");
-        } else
+        } else //Если пути не совпадают, также возможно наличие двух вариантов, это либо удаленный olddir, либо новый newdir
         {
             // Поиск совпадающего каталога в actualv
             XMLElement* searcher = newdir;
@@ -200,14 +200,14 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                 searcher = searcher->NextSiblingElement("directory");
             }
 
-            if (!searcher)
+            if (!searcher) //т.е. элемент olddir удален
             {
                 // Каталог удалён
                 XMLElement* deldir = update->InsertNewChildElement("deldir");
                 deldir->SetAttribute("path", oldpath);
                 olddir = olddir->NextSiblingElement("directory");
             }
-            else
+            else //т.е. в интервале между newdir и searcher находятся newdir
             {
                 // Добавленные каталоги до найденного
                 XMLElement* temp = newdir;
@@ -215,6 +215,9 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
                 {
                     XMLElement* newd = update->InsertNewChildElement("newdir");
                     newd->SetAttribute("path", temp->Attribute("path"));
+
+                    add_news(newd, temp); //Recursion /GPT проверь тут
+
                     temp = temp->NextSiblingElement("directory");
                 }
                 newdir = searcher->NextSiblingElement("directory");
@@ -232,14 +235,14 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
         olddir = olddir->NextSiblingElement("directory");
     }
 
-    // Добавленные новых каталогов и новых файлов внутри них
+    // Добавленные новых каталогов и новых файлов внутри них (а тут файлы не добавляются)
     while (newdir) //Элемент, который мы парсим
     {
-        XMLElement* newd = update->InsertNewChildElement("newdir"); //Новый элемент в update
-        newd->SetAttribute("path", newdir->Attribute("path"));
+        XMLElement* up_dir = update->InsertNewChildElement("newdir"); //Новый элемент в update
+        up_dir->SetAttribute("path", newdir->Attribute("path"));
 
         // Добавленные новых каталогов и новых файлов внутри них
-        add_news(newd, newdir);
+        add_news(up_dir, newdir); //GPT CHAT!!! и тут тоже проверь
 
         newdir = newdir->NextSiblingElement("directory");
     }
@@ -249,22 +252,26 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
 //Отправка данных, при парсинге файла delta-meta
 void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<char> & buffer)
 {
+    pthread_t threadid = pthread_self();
     XMLElement* xmliter = nullptr;
     uint16_t header_size;
     size_t bytes_readed;
     std::string header, tag, value;
-    Path filedir, relpath, fullname;
-    filedir = Path(dir);
+    Path filedir(dir);
 
-    //Цикл отправки файлов
+    #ifdef DEBUG_BUILD
+    std::cout << "DeltaWorker " << threadid << " : send_delta called for dir: " << dir << std::endl;
+    #endif
+
+    // Цикл отправки новых файлов
     for(xmliter = xmlel->FirstChildElement("newfile"); xmliter; xmliter = xmliter->NextSiblingElement("newfile"))
     {
         std::string weightstr, file_hash;
-        int fd; //Дескриптор файла для sendfile
+        int fd; // Дескриптор файла для sendfile
 
         try {
-            relpath = xmliter->Attribute("path");
-            fullname = filedir / relpath;
+            Path relpath = xmliter->Attribute("path");
+            Path fullname = filedir / relpath;
             if (!std::filesystem::exists(fullname))
                 throw std::runtime_error("Файл не найден: " + fullname.string());
 
@@ -280,132 +287,147 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
             if((fd = open(fullname.string().c_str(), O_RDONLY)) == -1)
                 throw std::runtime_error("Ошибка открытия файла: " + fullname.string());
 
-            //Отправляем заголовок с путем
+            // Отправляем заголовок с путем
             header = build_header(TagStrings::NEWFILE, relpath.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
-#ifdef DEBUG_BUILD
-            pthread_t threadid = pthread_self();
-            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
-#endif
+            #ifdef DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " sending header: " << header << std::endl;
+            #endif
 
-            //Отправим заголовок с хэшем
+            // Отправляем заголовок с хэшем
             header = build_header(TagStrings::HASH, file_hash.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
-#ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << "sending header: " << header << std::endl;
-#endif
+            #ifdef DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " sending header: " << header << std::endl;
+            #endif
 
+            // Ожидаем ответ
             bytes_readed = recvheader(sockfd, header, buffer);
             parse_header(header, tag, value);
-#ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << "got header: " << header << std::endl;
-#endif
+            #ifdef DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " got header: " << header << std::endl;
+            #endif
 
-            if (tag == TagStrings::NEWFILE && value == TagStrings::AGREE) //Отправляем файл
+            if (tag == TagStrings::NEWFILE && value == TagStrings::AGREE) // Отправляем файл
             {
+                #ifdef DEBUG_BUILD
+                std::cout << "DeltaWorker " << threadid << " : отправка файла " << relpath << " размером " << weight << " байт" << std::endl;
+                #endif
+
                 bytes_readed = send_file(sockfd, fd, weight, buffer);
                 if(bytes_readed != weight)
                 {
                     close(fd);
-                    throw std::runtime_error("Error while sending file" + fullname.string());
+                    throw std::runtime_error("Error while sending file " + fullname.string());
                 }
 
-                //И не забываем закрыть файл если все прошло успешно
                 if(close(fd) == -1)
                     throw std::runtime_error("File closing error: " + fullname.string());
 
                 #ifdef DEBUG_BUILD
-                std::cout << "Newfile sent: " << relpath << std::endl;
-                #endif // DEBUG_BUILD
+                std::cout << "DeltaWorker " << threadid << " : файл отправлен: " << relpath << std::endl;
+                #endif
             }
             else if (tag == TagStrings::NEWFILE && value == TagStrings::REJECT)
             {
                 #ifdef DEBUG_BUILD
-                std::cout << "File rejected: " << relpath << std::endl;
+                std::cout << "DeltaWorker " << threadid << " : файл отклонён сервером: " << relpath << std::endl;
                 #endif
             }
             else
-                throw std::invalid_argument("Unpropriate newfile answer");
-        } //Блок try цикла отправки файлов
-        catch(std::invalid_argument & ex) //Не критичное исключение, а выбрасывают в отказ на одной процедуре ниже
+            {
+                throw std::invalid_argument("Unpropriate newfile answer: " + tag + ":" + value);
+            }
+        }
+        catch(std::invalid_argument & ex)
         {
-            std::cerr << "Got error: " << ex.what() << std::endl;
+            std::cerr << "DeltaWorker " << threadid << " got invalid argument error: " << ex.what() << std::endl;
             xmliter = xmliter->NextSiblingElement("newfile");
             continue;
-        } } //Цикл отправки файлов
+        }
+        catch(std::runtime_error & ex)
+        {
+            std::cerr << "DeltaWorker " << threadid << " got runtime error: " << ex.what() << std::endl;
+            xmliter = xmliter->NextSiblingElement("newfile");
+            continue;
+        }
+    }
 
-    //Цикл отправки файлов на удаление
+    // Цикл отправки файлов на удаление
     for(xmliter = xmlel->FirstChildElement("delfile"); xmliter; xmliter = xmliter->NextSiblingElement("delfile"))
     {
-        relpath = xmliter->Attribute("path");
-
+        Path relpath = xmliter->Attribute("path");
         try {
             header = build_header(TagStrings::DELFILE, relpath.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            std::cout << "DELFILE SENT: " << relpath << std::endl;
-            #endif // DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " DELFILE SENT: " << relpath << std::endl;
+            #endif
         }
-        catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
+        catch(std::invalid_argument & ex)
         {
-            std::cerr << "Got error: " << ex.what() << std::endl;
+            std::cerr << "DeltaWorker " << threadid << " got invalid argument error while DELFILE processing: " << ex.what() << std::endl;
             continue;
         }
-    }  //Цикл отправки файлов на удаление
+    }
 
     // Цикл удаления каталогов
     for(xmliter = xmlel->FirstChildElement("deldir"); xmliter; xmliter = xmliter->NextSiblingElement("deldir"))
     {
-        relpath = xmliter->Attribute("path");
-
+        Path relpath = xmliter->Attribute("path");
         try {
             header = build_header(TagStrings::DELDIR, relpath.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            std::cout << "DELDIR SENT: " << relpath << std::endl;
-            #endif // DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " DELDIR SENT: " << relpath << std::endl;
+            #endif
         }
-        catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
+        catch(std::invalid_argument & ex)
         {
-            std::cout << "Invalid arg while deldir proccecing: " << ex.what() << std::endl;
+            std::cerr << "DeltaWorker " << threadid << " invalid arg while DELDIR processing: " << ex.what() << std::endl;
             continue;
         }
-    } // Цикл удаления каталогов
+    }
 
-    //Цикл рекурсивной обработки новых каталогов
+    // Рекурсивная обработка новых каталогов
     for(xmliter = xmlel->FirstChildElement("newdir"); xmliter; xmliter = xmliter->NextSiblingElement("newdir"))
     {
-        relpath = xmliter->Attribute("path");
-
+        Path relpath = xmliter->Attribute("path");
         try {
-            header = tag + string(relpath);
+            header = build_header(TagStrings::NEWDIR, relpath.c_str());
             bytes_readed = sendheader(sockfd, header, buffer);
 
             #ifdef DEBUG_BUILD
-            std::cout << "NEWDIR SENT: " << relpath << std::endl;
-            #endif // DEBUG_BUILD
+            std::cout << "DeltaWorker " << threadid << " NEWDIR SENT: " << relpath << std::endl;
+            #endif
         }
-        catch(std::invalid_argument & ex) //Попалось что то, что не сконвертировать, либо симлинк как то затесался
+        catch(std::invalid_argument & ex)
         {
-            std::cerr << "Got error: " << ex.what() << std::endl;
+            std::cerr << "DeltaWorker " << threadid << " got invalid argument error while NEWDIR processing: " << ex.what() << std::endl;
             continue;
         }
 
-        send_delta(sockfd, xmliter, filedir, buffer); //Recurion
-    }  //Цикл рекурсивной обработки новых каталогов
+        // Рекурсивный вызов
+        send_delta(sockfd, xmliter, filedir.string(), buffer);
+    }
 
-    //Цикл обработки директорий, которые не попадают ни в одну категорию
+    // Обработка прочих директорий
     for(xmliter = xmlel->FirstChildElement("directory"); xmliter; xmliter = xmliter->NextSiblingElement("directory"))
     {
-        send_delta(sockfd, xmliter, filedir, buffer);  //Recurion
-    } //Цикл обработки директорий, которые не попадают ни в одну категорию
+        #ifdef DEBUG_BUILD
+        std::cout << "DeltaWorker " << threadid << " processing directory element recursively" << std::endl;
+        #endif
+        send_delta(sockfd, xmliter, filedir.string(), buffer);
+    }
 }
+
 
 //Функция, которая рекурсивно добавляет записи о новых файлах и каталогах
 //Вызывается из delta_dmeta, когда завершена отработка наименьшего множества каталогов
 //И остались новые записи каталогов (новые каталоги и файлы внутри)
+//Update - указывает на элемент генерируемого файла, actual - на элемент файла, который парсится
 void add_news(XMLElement* update, XMLElement* actual)
 {
     // Обработка файлов
