@@ -83,8 +83,6 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
             try {
                 //Получаем метаданные о новой версии
                 get_meta(metafile, build_time, project_name, version, author);
-                //Генерируем fullmeta xml и сохраняем
-                generate_fullxml(build_time, project_name, version, author);
 
                 //Делаем снэп новой версии
                 new_snap = snap_dir / version;
@@ -96,9 +94,19 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 std::cout << "version " <<  version << " duplicated to " <<  snap_dir <<  std::endl;
 
                 // Удаляем meta.XML и устанавливаем флаги игнорирования
-                ignore_meta_delete = true;
-                ignore_meta_modify = true;
-                std::filesystem::remove(metafile);
+#ifdef DELETE_META
+                if (std::filesystem::exists(metafile))
+                {
+                    std::cout << "Removing metafile. " << std::endl;
+                    std::filesystem::remove(metafile);
+                    ignore_meta_delete = true;
+                    ignore_meta_modify = true;
+                }
+#endif
+
+
+                //Генерируем fullmeta xml и сохраняем
+                generate_fullxml(build_time, project_name, version, author);
 
             }
             catch(std::exception & ex)
@@ -108,7 +116,7 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 continue;
             }
 
-            std::cout << "Fullmeta of project " << project_name << "generated" << std::endl;
+            std::cout << "Fullmeta of project " << project_name << " generated" << std::endl;
             std::cout << "Current version: " << version << " build by " << author << std::endl;
 
         }  //fullmeta generating
@@ -125,8 +133,9 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                     continue;
                 }
 
+                //База будет для событий IN_MODIFY и IN_DELETE_SELF названием самого объекта
+                //А для каталого названием директории, к которой доб. поле name события
                 std::string base = fiter->second;
-                if (!base.empty() && base.back() != '/') base += "/";
 
                 if (event->mask & IN_MODIFY)
                 {
@@ -135,8 +144,6 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                     } else if (std::filesystem::exists(base)) {
                         std::cout << "File modified: " << base << std::endl;
                         alarm(alrmtime);
-                    } else {
-                        std::cout << "IN_MODIFY ignored for deleted file: " << base << std::endl;
                     }
                 }
 

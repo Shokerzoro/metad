@@ -32,7 +32,7 @@ void open_XML_doc(XMLDocument & xmldoc, string fullname)
     cout << " - - - complete" << endl;
     #endif // debug
 }
-//Получить версию и удалить файл
+//Получить метаданные
 void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string & vers_str, string & author_str)
 {
     if(!std::filesystem::exists(metafile))
@@ -82,12 +82,7 @@ void get_meta(Path & metafile, string & bldtime_str, string & proj_name, string 
     author_str = author_str_c;
 
     cout << "Project " << proj_name << " build at " << bldtime_str << endl;
-    cout << "by " << author_str << " has " << vers_str << "version " << endl;
-
-    #ifdef DELETE_META
-    if(!std::filesystem::remove(metafile))
-        throw std::runtime_error("Unknown error");
-    #endif
+    cout << "by " << author_str << " has " << vers_str << " version " << endl;
 }
 
 //Полчить версию из xml файла
