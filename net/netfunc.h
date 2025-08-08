@@ -5,42 +5,69 @@
 #ifndef NETFUNC_H
 #define NETFUNC_H
 
+#include <filesystem>
 #include <string>
 #include <vector>
+#include <cstdint>  // For C++ code
+#include <tinyxml2.h>
 
-struct TagStrings {
-    static constexpr const char* PROTOCOL = "PROTOCOL";
-    static constexpr const char* UNETMES = "UNET-MES";
-    static constexpr const char* NOUPDATE = "NOUPDATE";
-    static constexpr const char* SOMEUPDATE = "SOMEUPDATE";
-    static constexpr const char* GETUPDATE = "GETUPDATE";
-    static constexpr const char* VERSION = "VERSION";
-    static constexpr const char* HASH = "HASH";
+namespace netfuncs
+{
 
-    static constexpr const char* NEWDIR = "NEWDIR";
-    static constexpr const char* NEWFILE = "NEWFILE";
-    static constexpr const char* DELFILE = "DELFILE";
-    static constexpr const char* DELDIR = "DELDIR";
-
-    static constexpr const char* AGREE = "AGREE";
-    static constexpr const char* REJECT = "REJECT";
-    static constexpr const char* COMPLETE = "COMPLETE";
-};
-
-class ascii_string
+class ioworker
 {
 public:
-    ascii_string(const std::string & input);
-    ascii_string(const char* input);
-    ascii_string & operator=(const std::string& input);
-    ascii_string & operator=(const char* input);
+    // Конструктор
+    ioworker(int sockfd);
+    std::string& get_tag();
+    std::string& get_value();
+
+    // Интерфейс
+    void sendfile(int fd, uint32_t weigth);
+    void recvfile(const std::filesystem::path & filepath);
+    void send(std::string& msg);
+    void send(const char* msg);
+    void send(std::string& tag, std::string& value);
+    void send(const char* tag, const char* value);
+    void read();
+
+    //Сравнения
+    bool fullcmp(const std::string& tag, const std::string& value);
+    bool tagcmp(const std::string& tag);
+    bool tagcmp(const char* tag);
+    bool valcmp(const std::string& value);
+    bool valcmp(const char* value);
+
+    // Настройка
+    void set_deb_info(bool opt);
+
+private:
+    ssize_t iobytes;
+    int m_sockfd;
+    std::vector<char> buffer;
+    std::string m_header, m_tag, m_value;
+
+    bool deb_info;
 };
 
-//Работа с сетью
-extern size_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer); //Отправка целого файла
-extern size_t recvheader(const int sockfd, std::string & header, std::vector<char> & buffer); //Чтение хэдера из сокета
-extern size_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer); //запись хэдера в сокет
+class ascii_string : public std::string
+{
+public:
+    explicit ascii_string(const std::string& input);
+    explicit ascii_string(const char* input);
+
+private:
+    void validate() const;
+};
+
+extern ssize_t send_file(const int sockfd, int fd, uint32_t weight, std::vector<char> & buffer); //Отправка целого файла
+extern ssize_t recv_file(int sockfd, const std::filesystem::path & path);
+extern ssize_t recvheader(const int sockfd, std::string & header, std::vector<char> & buffer); //Чтение хэдера из сокета
+extern ssize_t sendheader(const int sockfd, const std::string & header, std::vector<char> & buffer); //запись хэдера в сокет
 extern void parse_header(const std::string & header, std::string & tag, std::string & value); //Парсим хэдер на тэг и ценность
+extern std::string build_header(const std::string & tag, const std::string & value);
 extern std::string build_header(const char* tag, const char* value);
+}
+
 
 #endif //NETFUNC_H

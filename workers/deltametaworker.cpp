@@ -12,6 +12,9 @@
 #include "../meta.h"
 #include "../net/netfunc.h"
 #include "../exeptions/unaccaptable.h"
+#include "../net/tagstrrings.h"
+
+#include <thread>
 
 using namespace tinyxml2;
 using std::cout;
@@ -26,23 +29,29 @@ using Path = std::filesystem::path;
 extern Path target;
 extern Path meta;
 
-enum class State { NONE, PROPER, NOUPDATE, APPROVED, AGREED };
+enum class State { NONE, PROPER, NOUPDATE, APPROVED, AGREED, REJECTED, COMPLETE};
 
-// Объявления хэндлеров
-static bool handle_none_state(int sockfd, const string& tag, const string& value, State& state, vector<char>& buffer);
-static bool handle_proper_state(int sockfd, const string& tag, const string& value, State& state,
-                                vector<char>& buffer, Path& old_meta_path, string& old_version,
-                                Path& actual_meta_path, string& actual_version);
-static bool handle_noupdate_state(int sockfd, const string& tag, const string& value, ThreadDataContainer* thread_data);
-static bool handle_approved_state(int sockfd, const string& tag, const string& value, State& state,
-                                  const string& actual_version, vector<char>& buffer, ThreadDataContainer* thread_data);
-static bool handle_agreed_state(int sockfd, const Path& old_meta_path, const Path& actual_meta_path,
-                                const string& old_version, const string& actual_version,
-                                vector<char>& buffer, ThreadDataContainer* thread_data);
-static void create_delta_file(const Path& old_meta_path, const Path& actual_meta_path,
-                              const string& actual_version, const string& old_version, Path& deltameta);
-static bool send_delta_file(int sockfd, const Path& deltameta, vector<char>& buffer,
-                            const string& actual_version, ThreadDataContainer* thread_data);
+// Хэндлер начального состояния (ожидается PROTOCOL = UNETMES)
+static void handle_none_state(State& state, netfuncs::ioworker& unetmes_connector);
+
+// Хэндлер состояния PROPER (проверка версии, решение — есть ли обновление)
+static void handle_proper_state(State& state, netfuncs::ioworker& unetmes_connector,
+                                std::filesystem::path& old_meta_path, std::string& old_version,
+                                std::filesystem::path& actual_meta_path, std::string& actual_version);
+
+// Хэндлер состояния NOUPDATE (ожидается PROTOCOL = COMPLETE)
+static void handle_noupdate_state(netfuncs::ioworker& unetmes_connector, State& state);
+
+// Хэндлер состояния APPROVED (ожидается AGREE/REJECT)
+static void handle_approved_state(State& state, const std::string& actual_version, netfuncs::ioworker& unetmes_connector);
+
+// Функция генерации дельта-файла
+static void create_delta_file(const std::filesystem::path& old_meta_path,
+                              const std::filesystem::path& actual_meta_path,
+                              const std::string& actual_version,
+                              const std::string& old_version,
+                              std::filesystem::path& deltameta);
+
 
 void* delta_metad_worker(void* data) //Здесь непосредственно идет обслуживание клиентов
 {
@@ -58,54 +67,46 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
         return this_thread->stoprun();
     }
 
-    string header, tag, value;
-    vector<char> buffer(BUFFSIZE);
-    Path old_meta_path, actual_meta_path;
-    string old_version, actual_version;
+    pthread_t threadid = pthread_self();
+    netfuncs::ioworker unetmes_connector(sockfd);
+    Path old_meta_path, actual_meta_path, deltametapath, filedir;
+    string old_version, actual_version, docname;
     State state = State::NONE;
     int err_counter = 0;
-    size_t bytes_readed = 0;
 
     #ifdef DEBUG_BUILD
-    pthread_t threadid = pthread_self();
     cout << "DeltaWorker " << threadid << " starts routine" << endl;
+    unetmes_connector.set_deb_info(true);
     #endif
 
-    while (true)
+    while (state != State::AGREED)
     {
         try {
-            bytes_readed = recvheader(sockfd, header, buffer);
-            if (bytes_readed < 0)
-                throw std::runtime_error("Connection lost");
-            parse_header(header, tag, value);
+            unetmes_connector.read();
 
-            #ifdef DEBUG_BUILD
-            cout << "DeltaWorker " << threadid << " got header: " << header << endl;
-            #endif
-
-            bool continue_loop = true;
             switch(state)
             {
                 case State::NONE:
-                    continue_loop = handle_none_state(sockfd, tag, value, state, buffer);
+                    handle_none_state(state, unetmes_connector);
                     break;
                 case State::PROPER:
-                    continue_loop = handle_proper_state(sockfd, tag, value, state, buffer,
-                                                        old_meta_path, old_version, actual_meta_path, actual_version);
+                    handle_proper_state(state, unetmes_connector,old_meta_path, old_version, actual_meta_path, actual_version);
+                    #ifdef DEBUG_BUILD
+                    cout << "DeltaWorker " << threadid << " : найдена актуальная версия: " << actual_version << endl;
+                    cout << "DeltaWorker " << threadid << " : запрошена версия клиента: " << old_version << endl;
+                    cout << "DeltaWorker " << threadid << " : delta-meta XML документ: " << deltametapath << endl;
+                    #endif
                     break;
                 case State::NOUPDATE:
-                    continue_loop = handle_noupdate_state(sockfd, tag, value, this_thread);
+                    handle_noupdate_state(unetmes_connector, state);
                     break;
                 case State::APPROVED:
-                    continue_loop = handle_approved_state(sockfd, tag, value, state, actual_version, buffer, this_thread);
+                    handle_approved_state(state, actual_version, unetmes_connector);
                     break;
-                case State::AGREED:
-                    continue_loop = false;
-                    break;
+                default:
+                    return this_thread->stoprun();
             }
 
-            if (!continue_loop)
-                break;
         }
         catch (Unacceptable& ex)
         {
@@ -129,11 +130,37 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
         }
     }
 
-    if (state == State::AGREED)
+    if (state == State::AGREED) //На всякий случай с проверкой
     {
-        bool result = handle_agreed_state(sockfd, old_meta_path, actual_meta_path,
-                                          old_version, actual_version, buffer, this_thread);
-        if (!result) return this_thread->stoprun();
+        //Получаем имя дельтафайла
+        docname = "delta-meta-" + old_version + "-" + actual_version + ".XML";
+        deltametapath = meta / docname;
+
+        //Генерируем дельтафайл, если нет
+        if (!std::filesystem::exists(deltametapath))
+            create_delta_file(old_meta_path, actual_meta_path, actual_version, old_version, deltametapath);
+
+        //Открываем для отправки
+        XMLDocument delta_XML_doc;
+        open_XML_doc(delta_XML_doc, deltametapath.string());
+        XMLElement* update = delta_XML_doc.RootElement();
+        filedir = update->Attribute("filedir");
+        if (!std::filesystem::exists(filedir))
+            throw std::runtime_error("Filedir does not exist");
+
+        try {
+            std::cout << "DeltaWorker " << threadid << ": started update sending: " << old_version << "-" << actual_version  << std::endl;
+            //Основная функция отправки
+            send_delta(update, filedir, unetmes_connector);
+            unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::COMPLETE);
+        }
+        catch (std::runtime_error& ex)
+        {
+            cerr << "DeltaWorker : ошибка при отправке обновлений: " << ex.what() << endl;
+            unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::SERVERERROR);
+            return this_thread->stoprun();
+        }
+
     }
 
     return this_thread->stoprun();
@@ -141,131 +168,75 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
 
 // ---------- Хэндлеры ----------
 
-static bool handle_none_state(int sockfd, const string& tag, const string& value, State& state, vector<char>& buffer)
+static void handle_none_state(State& state, netfuncs::ioworker & unetmes_connector)
 {
-    if (tag == TagStrings::PROTOCOL && value == TagStrings::UNETMES)
+    if (unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::UNETMES))
     {
         state = State::PROPER;
-        string header = build_header(TagStrings::PROTOCOL, TagStrings::UNETMES);
-        #ifdef DEBUG_BUILD
-        pthread_t threadid = pthread_self();
-        std::cout << "DeltaWorker " << threadid << " sending header: " << header << std::endl;
-        #endif
-        sendheader(sockfd, header, buffer);
-        return true;
+        unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::UNETMES);
     }
-    return false;
+    else
+        throw Unacceptable("Wrong protocol");
 }
 
-static bool handle_proper_state(int sockfd, const string& tag, const string& value, State& state,
-                                vector<char>& buffer, Path& old_meta_path, string& old_version,
+static void handle_proper_state(State& state, netfuncs::ioworker & unetmes_connector,
+                                Path& old_meta_path, string& old_version,
                                 Path& actual_meta_path, string& actual_version)
 {
-    #ifdef DEBUG_BUILD
-    pthread_t threadid = pthread_self();
-    #endif
 
-    if (tag != TagStrings::VERSION) return true;
 
-    old_meta_path = target / ("full-meta-" + value + ".XML");
+    if (!unetmes_connector.tagcmp(TagStrings::VERSION))
+        throw Unacceptable("Wrong version tag");
+
+    old_meta_path = target / ("full-meta-" + unetmes_connector.get_value() + ".XML");
 
     if (std::filesystem::exists(old_meta_path))
     {
-        old_version = value;
+        old_version = unetmes_connector.get_value() ;
         get_actual(target, actual_meta_path);
         get_version(actual_meta_path, actual_version);
-
-        #ifdef DEBUG_BUILD
-        cout << "DeltaWorker " << threadid << " : найдена актуальная версия: " << actual_version << endl;
-        cout << "DeltaWorker " << threadid << " : запрошена версия клиента: " << old_version << endl;
-        #endif
 
         if (old_meta_path == actual_meta_path)
         {
             state = State::NOUPDATE;
-            string header = build_header(TagStrings::PROTOCOL, TagStrings::NOUPDATE);
-            #ifdef DEBUG_BUILD
-            cout << "DeltaWorker " << threadid << " : версии совпадают, обновлений нет. Отправляю NOUPDATE." << endl;
-            #endif
-            sendheader(sockfd, header, buffer);
-            return false;
+            unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::NOUPDATE);
+            return;
         }
         else
         {
             state = State::APPROVED;
-            string header = build_header(TagStrings::PROTOCOL, TagStrings::SOMEUPDATE);
-            #ifdef DEBUG_BUILD
-            cout << "DeltaWorker " << threadid << " : версии различаются, есть обновления. Отправляю SOMEUPDATE." << endl;
-            #endif
-            sendheader(sockfd, header, buffer);
-            return true;
+            unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::SOMEUPDATE);
+            return;
         }
     }
     else
-    {
-        #ifdef DEBUG_BUILD
-        pthread_t threadid = pthread_self();
-        cout << "DeltaWorker " << threadid << " : ошибка — неверный запрос версии: " << value << endl;
-        #endif
         throw Unacceptable("Wrong version request");
-    }
 }
 
-static bool handle_noupdate_state(int sockfd, const string& tag, const string& value, ThreadDataContainer* thread_data)
+static void handle_noupdate_state(netfuncs::ioworker & unetmes_connector, State& state)
 {
-    if (tag == TagStrings::PROTOCOL && value == TagStrings::COMPLETE)
-        return false;
-    return true;
-}
-
-static bool handle_approved_state(int sockfd, const string& tag, const string& value, State& state,
-                                  const string& actual_version, vector<char>& buffer, ThreadDataContainer* thread_data)
-{
-    #ifdef DEBUG_BUILD
-    pthread_t threadid = pthread_self();
-    #endif
-
-    if (tag == TagStrings::PROTOCOL)
+    if (unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::COMPLETE))
     {
-        if (value == "AGREE")
-        {
-            state = State::AGREED;
-            string header = build_header(TagStrings::VERSION, actual_version.c_str());
-            #ifdef DEBUG_BUILD
-            cout << "DeltaWorker " << threadid << " sending header: " << header << endl;
-            #endif
-            sendheader(sockfd, header, buffer);
-            return false;
-        }
-        if (value == "REJECT")
-        {
-            #ifdef DEBUG_BUILD
-            cout << "DeltaWorker " << threadid << " : клиент отказался от обновления" << endl;
-            #endif
-            thread_data->stoprun();
-            return false;
-        }
+        state = State::COMPLETE;
+        return;
     }
-    return true;
+    throw std::invalid_argument("Wrong noupdate answer");
 }
 
-static bool handle_agreed_state(int sockfd, const Path& old_meta_path, const Path& actual_meta_path,
-                                const string& old_version, const string& actual_version,
-                                vector<char>& buffer, ThreadDataContainer* thread_data)
+static void handle_approved_state(State& state, const string& actual_version, netfuncs::ioworker & unetmes_connector)
 {
-    #ifdef DEBUG_BUILD
-    pthread_t threadid = pthread_self();
-    cout << "DeltaWorker " << threadid << " : старый full-meta XML документ: " << old_meta_path << endl;
-    cout << "DeltaWorker " << threadid << " : актуальный full-meta XML документ: " << actual_meta_path << endl;
-    #endif
 
-    string docname = "delta-meta-" + old_version + "-" + actual_version + ".XML";
-    Path deltameta = meta / docname;
-
-    if (!std::filesystem::exists(deltameta))
-        create_delta_file(old_meta_path, actual_meta_path, actual_version, old_version, deltameta);
-
-    return send_delta_file(sockfd, deltameta, buffer, actual_version, thread_data);
+    if (unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::AGREE))
+    {
+        state = State::AGREED;
+        unetmes_connector.send(TagStrings::VERSION, actual_version.c_str());
+        return;
+    }
+    if (unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::REJECT))
+    {
+        state = State::REJECTED;
+        return;
+    }
 }
 
 static void create_delta_file(const Path& old_meta_path, const Path& actual_meta_path,
@@ -292,6 +263,7 @@ static void create_delta_file(const Path& old_meta_path, const Path& actual_meta
     update->SetAttribute("version", actual_version.c_str());
     update->SetAttribute("filedir", actualfiledir.c_str());
 
+    //Вызов функции генерации
     delta_dmeta(oldupdate, actualupdate, update);
 
     new_XML_doc.SaveFile(deltameta.string().c_str());
@@ -301,42 +273,3 @@ static void create_delta_file(const Path& old_meta_path, const Path& actual_meta
     #endif
 }
 
-static bool send_delta_file(int sockfd, const Path& deltameta, vector<char>& buffer,
-                            const string& actual_version, ThreadDataContainer* thread_data)
-{
-    #ifdef DEBUG_BUILD
-    pthread_t threadid = pthread_self();
-    cout << "DeltaWorker " << threadid << " : начинаю отправку обновления версии " << actual_version << endl;
-    #endif
-
-    XMLDocument delta_XML_doc;
-    open_XML_doc(delta_XML_doc, deltameta.string().c_str());
-
-    XMLElement* update = delta_XML_doc.RootElement();
-    string filedir = update->Attribute("filedir");
-    if (!std::filesystem::exists(filedir))
-    {
-        cerr << "DeltaWorker : путь для файлов обновления не найден: " << filedir << endl;
-        return false;
-    }
-
-    try {
-        sendheader(sockfd, actual_version, buffer);
-        send_delta(sockfd, update, filedir, buffer);
-    }
-    catch (std::runtime_error& ex)
-    {
-        cerr << "DeltaWorker : ошибка при отправке обновления: " << ex.what() << endl;
-        sendheader(sockfd, "SERVERERROR", buffer);
-        return false;
-    }
-
-    #ifdef DEBUG_BUILD
-    cout << "DeltaWorker " << threadid << " : отправка обновления версии " << actual_version << " завершена" << endl;
-    cout << "DeltaWorker " << threadid << " : delta_metad_worker ends routine" << endl;
-    #endif
-
-    sendheader(sockfd, "COMPLETE", buffer);
-
-    return true;
-}

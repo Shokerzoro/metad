@@ -230,16 +230,7 @@ void get_actual(const Path & meta_dir, Path & actual_meta_path)
     actual_meta_path = latest_file;
 } //Get actual
 
-//Парсим хэдер на тэг и ценность
-void parse_header(const std::string & header, std::string & tag, std::string & value)
-{
-    size_t pos = header.find(':');
-    if (pos == std::string::npos)
-        throw std::invalid_argument("Invalid header");
 
-    tag = string(header.begin(), header.begin() + pos);
-    value = string(header.begin() + pos + 1, header.end());
-} //Parse header
 
 //Получение хэша sha256 по файлу
 std::string computeFileSHA256(const std::string& filePath)

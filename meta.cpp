@@ -12,6 +12,7 @@
 #include "mainfunc.h"
 #include "net/netfunc.h"
 #include "tstring.h"
+#include "net/tagstrrings.h"
 
 using namespace tinyxml2;
 using Direntry = std::filesystem::directory_entry;
@@ -250,17 +251,16 @@ void delta_dmeta(XMLElement* oldv, XMLElement* actualv, XMLElement* update)
 }
 
 //Отправка данных, при парсинге файла delta-meta
-void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<char> & buffer)
+void send_delta(XMLElement* xmlel, const Path & filedir, netfuncs::ioworker & unetmes_connector)
 {
     pthread_t threadid = pthread_self();
     XMLElement* xmliter = nullptr;
     uint16_t header_size;
     size_t bytes_readed;
     std::string header, tag, value;
-    Path filedir(dir);
 
     #ifdef DEBUG_BUILD
-    std::cout << "DeltaWorker " << threadid << " : send_delta called for dir: " << dir << std::endl;
+    std::cout << "DeltaWorker " << threadid << " : send_delta called for dir: " << filedir << std::endl;
     #endif
 
     // Цикл отправки новых файлов
@@ -272,8 +272,10 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
         try {
             Path relpath = xmliter->Attribute("path");
             Path fullname = filedir / relpath;
+            //Если файл не существует, тогда выкенет инсключение
             if (!std::filesystem::exists(fullname))
-                throw std::runtime_error("Файл не найден: " + fullname.string());
+                std::cout << "!!!!! send_delta newfile: " << fullname << " no such file" << std::endl;
+                //throw std::runtime_error("Файл не найден: " + fullname.string());
 
             char* endptr = nullptr;
             weightstr = xmliter->Attribute("weight");
@@ -288,56 +290,32 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
                 throw std::runtime_error("Ошибка открытия файла: " + fullname.string());
 
             // Отправляем заголовок с путем
-            header = build_header(TagStrings::NEWFILE, relpath.c_str());
-            bytes_readed = sendheader(sockfd, header, buffer);
-            #ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << " sending header: " << header << std::endl;
-            #endif
+            unetmes_connector.send(TagStrings::NEWFILE, relpath.c_str());
 
             // Отправляем заголовок с хэшем
-            header = build_header(TagStrings::HASH, file_hash.c_str());
-            bytes_readed = sendheader(sockfd, header, buffer);
-            #ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << " sending header: " << header << std::endl;
-            #endif
+            unetmes_connector.send(TagStrings::HASH, file_hash.c_str());
 
             // Ожидаем ответ
-            bytes_readed = recvheader(sockfd, header, buffer);
-            parse_header(header, tag, value);
-            #ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << " got header: " << header << std::endl;
-            #endif
-
-            if (tag == TagStrings::NEWFILE && value == TagStrings::AGREE) // Отправляем файл
+            unetmes_connector.read();
+            if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::AGREE)) // Отправляем файл
             {
-                #ifdef DEBUG_BUILD
-                std::cout << "DeltaWorker " << threadid << " : отправка файла " << relpath << " размером " << weight << " байт" << std::endl;
-                #endif
-
-                bytes_readed = send_file(sockfd, fd, weight, buffer);
-                if(bytes_readed != weight)
-                {
-                    close(fd);
-                    throw std::runtime_error("Error while sending file " + fullname.string());
-                }
-
-                if(close(fd) == -1)
-                    throw std::runtime_error("File closing error: " + fullname.string());
-
-                #ifdef DEBUG_BUILD
-                std::cout << "DeltaWorker " << threadid << " : файл отправлен: " << relpath << std::endl;
+                #ifdef SEND_FILES
+                unetmes_connector.sendfile(fd, weight);
                 #endif
             }
-            else if (tag == TagStrings::NEWFILE && value == TagStrings::REJECT)
+            else if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::REJECT))
             {
                 #ifdef DEBUG_BUILD
-                std::cout << "DeltaWorker " << threadid << " : файл отклонён сервером: " << relpath << std::endl;
+                std::cout << "DeltaWorker " << threadid << " : файл отклонён клиентом: " << relpath << std::endl;
                 #endif
             }
             else
             {
                 throw std::invalid_argument("Unpropriate newfile answer: " + tag + ":" + value);
             }
+
+            if(close(fd) == -1)
+                throw std::runtime_error("File closing error: " + fullname.string());
         }
         catch(std::invalid_argument & ex)
         {
@@ -358,12 +336,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
     {
         Path relpath = xmliter->Attribute("path");
         try {
-            header = build_header(TagStrings::DELFILE, relpath.c_str());
-            bytes_readed = sendheader(sockfd, header, buffer);
-
-            #ifdef DEBUG_BUILD
-            std::cout << "DeltaWorker " << threadid << " DELFILE SENT: " << relpath << std::endl;
-            #endif
+            unetmes_connector.send(TagStrings::DELFILE, relpath.c_str());
         }
         catch(std::invalid_argument & ex)
         {
@@ -377,8 +350,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
     {
         Path relpath = xmliter->Attribute("path");
         try {
-            header = build_header(TagStrings::DELDIR, relpath.c_str());
-            bytes_readed = sendheader(sockfd, header, buffer);
+            unetmes_connector.send(TagStrings::DELDIR, relpath.c_str());
 
             #ifdef DEBUG_BUILD
             std::cout << "DeltaWorker " << threadid << " DELDIR SENT: " << relpath << std::endl;
@@ -396,8 +368,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
     {
         Path relpath = xmliter->Attribute("path");
         try {
-            header = build_header(TagStrings::NEWDIR, relpath.c_str());
-            bytes_readed = sendheader(sockfd, header, buffer);
+            unetmes_connector.send(TagStrings::NEWDIR, relpath.c_str());
 
             #ifdef DEBUG_BUILD
             std::cout << "DeltaWorker " << threadid << " NEWDIR SENT: " << relpath << std::endl;
@@ -410,7 +381,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
         }
 
         // Рекурсивный вызов
-        send_delta(sockfd, xmliter, filedir.string(), buffer);
+        send_delta(xmliter, filedir, unetmes_connector);
     }
 
     // Обработка прочих директорий
@@ -419,7 +390,7 @@ void send_delta(int sockfd, XMLElement* xmlel, const string & dir, std::vector<c
         #ifdef DEBUG_BUILD
         std::cout << "DeltaWorker " << threadid << " processing directory element recursively" << std::endl;
         #endif
-        send_delta(sockfd, xmliter, filedir.string(), buffer);
+        send_delta(xmliter, filedir, unetmes_connector);
     }
 }
 

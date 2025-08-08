@@ -21,6 +21,7 @@ extern void setup_sigalarm_handler(void (*handler)(int));
 extern int inoinit(void);
 extern int watch_path(int infd, Direntry & newentry, uint32_t mask);
 extern void inotify_loop(int infd, Path & target, IMap & mapper);
+extern int clear_mapper(IMap & mapper);
 extern void inoupdate(int infd, IMap & mapper);
 
 //Работа с файлами и строками

@@ -30,6 +30,7 @@ add_executable(metad
     meta.h meta.cpp
     threaddatacontainer.h
     tstring.h
+        net/tagstrrings.h
 )
 
 # Подключаем заголовки tinyxml2
@@ -48,9 +49,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     target_compile_definitions(metad PRIVATE DEBUG_BUILD)
     target_compile_definitions(metad PRIVATE DELETE_META)
+    target_compile_definitions(metad PRIVATE SEND_FILES)
 else()
     target_compile_definitions(metad PRIVATE RELEASE_BUILD)
-    target_compile_definitions(metad PRIVATE DELETE_META)
+    target_compile_definitions(metad PRIVATE SEND_FILES)
 endif()
 if()
 

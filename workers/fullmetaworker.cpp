@@ -23,10 +23,6 @@ using Path = std::filesystem::path;
 using Direntry = std::filesystem::directory_entry;
 using Diriter = std::filesystem::directory_iterator;
 
-void inotify_loop(int infd, Path & target, IMap & mapper);
-int watch_path(int infd, Direntry & newentry, uint32_t mask);
-int clear_mapper(IMap & mapper);
-
 static void sigalarm_hdl(int sigid); //Установка обработчика таймера
 //Сохраняет с именем fullmeta-version
 static void generate_fullxml(std::string & bldtime_str, std::string & proj_name, std::string & version, std::string & author_str);
@@ -135,11 +131,12 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
 
                 //База будет для событий IN_MODIFY и IN_DELETE_SELF названием самого объекта
                 //А для каталого названием директории, к которой доб. поле name события
-                std::string base = fiter->second;
+                Path base = fiter->second;
 
                 if (event->mask & IN_MODIFY)
                 {
-                    if (ignore_meta_modify && base == metafile.string()) {
+                    if (ignore_meta_modify && base == metafile)
+                    {
                         std::cout << "IN_MODIFY ignored for meta.XML (manual delete in progress)" << std::endl;
                     } else if (std::filesystem::exists(base)) {
                         std::cout << "File modified: " << base << std::endl;
@@ -151,7 +148,8 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 {
                     std::cout << "File or dir deleted (self): " << base << std::endl;
 
-                    if (ignore_meta_delete && base == metafile.string()) {
+                    if (ignore_meta_delete && base == metafile)
+                    {
                         std::cout << "meta.XML deletion ignored (manual)" << std::endl;
                         ignore_meta_delete = false;
                         ignore_meta_modify = false;
@@ -167,21 +165,20 @@ void full_metad_worker(Path & snap_dir, int alrmtime)
                 {
                     if (event->mask & IN_CREATE)
                     {
-                        std::string fullname = base + event->name;
-                        Direntry newentry(fullname);
+                        Path newfile = base / event->name;
+                        Direntry newentry(newfile);
                         int wd = watch_path(infd, newentry, FILEMASK);
-                        if (wd != -1) mapper.insert(Pair(wd, fullname));
-                        std::cout << "File created: " << fullname << std::endl;
+                        if (wd != -1) mapper.insert(Pair(wd, newfile.string()));
+                        std::cout << "File created: " << newfile.string() << std::endl;
                         alarm(alrmtime);
                     }
                 } else
                 {
                     if (event->mask & IN_CREATE)
                     {
-                        std::string fullname = base + event->name;
-                        Path newdir(fullname);
+                        Path newdir(base / event->name);
                         inotify_loop(infd, newdir, mapper);
-                        std::cout << "Dir created: " << fullname << std::endl;
+                        std::cout << "Dir created: " << newdir.string() << std::endl;
                         alarm(alrmtime);
                     }
                 }
