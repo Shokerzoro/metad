@@ -91,11 +91,6 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
                     break;
                 case State::PROPER:
                     handle_proper_state(state, unetmes_connector,old_meta_path, old_version, actual_meta_path, actual_version);
-                    #ifdef DEBUG_BUILD
-                    cout << "DeltaWorker " << threadid << " : найдена актуальная версия: " << actual_version << endl;
-                    cout << "DeltaWorker " << threadid << " : запрошена версия клиента: " << old_version << endl;
-                    cout << "DeltaWorker " << threadid << " : delta-meta XML документ: " << deltametapath << endl;
-                    #endif
                     break;
                 case State::NOUPDATE:
                     handle_noupdate_state(unetmes_connector, state);
@@ -136,6 +131,12 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
         docname = "delta-meta-" + old_version + "-" + actual_version + ".XML";
         deltametapath = meta / docname;
 
+#ifdef DEBUG_BUILD
+        cout << "DeltaWorker " << threadid << " : найдена актуальная версия: " << actual_version << endl;
+        cout << "DeltaWorker " << threadid << " : запрошена версия клиента: " << old_version << endl;
+        cout << "DeltaWorker " << threadid << " : delta-meta XML документ: " << deltametapath << endl;
+#endif
+
         //Генерируем дельтафайл, если нет
         if (!std::filesystem::exists(deltametapath))
             create_delta_file(old_meta_path, actual_meta_path, actual_version, old_version, deltametapath);
@@ -153,6 +154,9 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
             //Основная функция отправки
             send_delta(update, filedir, unetmes_connector);
             unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::COMPLETE);
+            unetmes_connector.read();
+            if (!unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::COMPLETE))
+                throw std::runtime_error("No client approve update comlete");
         }
         catch (std::runtime_error& ex)
         {
@@ -160,7 +164,6 @@ void* delta_metad_worker(void* data) //Здесь непосредственно
             unetmes_connector.send(TagStrings::PROTOCOL, TagStrings::SERVERERROR);
             return this_thread->stoprun();
         }
-
     }
 
     return this_thread->stoprun();
@@ -225,7 +228,6 @@ static void handle_noupdate_state(netfuncs::ioworker & unetmes_connector, State&
 
 static void handle_approved_state(State& state, const string& actual_version, netfuncs::ioworker & unetmes_connector)
 {
-
     if (unetmes_connector.fullcmp(TagStrings::PROTOCOL, TagStrings::AGREE))
     {
         state = State::AGREED;

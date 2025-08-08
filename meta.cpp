@@ -297,21 +297,28 @@ void send_delta(XMLElement* xmlel, const Path & filedir, netfuncs::ioworker & un
 
             // Ожидаем ответ
             unetmes_connector.read();
-            if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::AGREE)) // Отправляем файл
+
+            if (unetmes_connector.tagcmp(TagStrings::NEWFILE))
             {
-                #ifdef SEND_FILES
-                unetmes_connector.sendfile(fd, weight);
-                #endif
-            }
-            else if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::REJECT))
-            {
-                #ifdef DEBUG_BUILD
-                std::cout << "DeltaWorker " << threadid << " : файл отклонён клиентом: " << relpath << std::endl;
-                #endif
+                if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::AGREE)) // Отправляем файл
+                {
+                    #ifdef SEND_FILES
+                    unetmes_connector.sendfile(fd, weight);
+                    #endif
+                    unetmes_connector.read();
+                    if (!unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::COMPLETE))
+                        throw std::runtime_error("No client approve after file sent");
+                }
+                if (unetmes_connector.fullcmp(TagStrings::NEWFILE, TagStrings::REJECT))
+                {
+                    #ifdef DEBUG_BUILD
+                    std::cout << "DeltaWorker " << threadid << " : файл отклонён клиентом: " << relpath << std::endl;
+                    #endif
+                }
             }
             else
             {
-                throw std::invalid_argument("Unpropriate newfile answer: " + tag + ":" + value);
+                throw std::invalid_argument("Unpropriate newfile answer: " + unetmes_connector.get_tag() + ":" + unetmes_connector.get_value());
             }
 
             if(close(fd) == -1)

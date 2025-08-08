@@ -208,7 +208,7 @@ namespace netfuncs
         if (bytes_readed != static_cast<size_t>(4))
             throw std::runtime_error("Connection is broken possibly");
 
-        off_t offset = 0;
+        ssize_t offset = 0;
         while (offset < weight)
         {
             ssize_t sent = sendfile(sockfd, fd, &offset, weight - offset);
